@@ -12,7 +12,13 @@
 import { HttpError, deviceFromToken, bumpQuota } from "./auth.js";
 import { shortId, canonicalJson, contentHash, sha256Hex } from "./ids.js";
 import { validateMeta, validatePayload, ASSET_SIZE_LIMITS } from "./validate.js";
-import { MAGIC_CHECKS, r2Key, isFormatTrackedKind, sniffFormat } from "./assets.js";
+import {
+  MAGIC_CHECKS,
+  r2Key,
+  isFormatTrackedKind,
+  sniffFormat,
+  assertImageWithinLimits,
+} from "./assets.js";
 import { jsonResponse, errorResponse, readJsonBounded } from "./http.js";
 import { signTicket, verifyTicket, TICKET_TTL_SECONDS } from "./tickets.js";
 import { insertConfigWithAssets, updateConfigWithAssets } from "./configs.js";
@@ -193,6 +199,8 @@ async function putDraftAsset(request, env, draftId, kind) {
   if (!check(bytes)) {
     throw new HttpError(400, "bad_asset", `Asset ${kind} failed the magic-byte check.`);
   }
+
+  assertImageWithinLimits(kind, bytes);
 
   // sha256 记进 customMetadata：提交时据此确认这份字节确实是 manifest 声明的
   // 那一份，不必把 1.2MB 读回内存重算一遍。

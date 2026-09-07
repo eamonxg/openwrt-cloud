@@ -43,7 +43,7 @@ async function listOwnConfigs(db, deviceId) {
       // what is still pending or already rejected -- or the author's own copy
       // of a card would promise artwork the store does not serve.
       `SELECT c.id, c.name, c.downloads, c.assets_status, c.status,
-              c.created_at, c.payload,
+              c.assets_reject_reason, c.created_at, c.payload,
               GROUP_CONCAT(a.kind) AS approved_kinds
          FROM configs c
          LEFT JOIN assets a ON a.config_id = c.id AND a.status = 'approved'
@@ -60,6 +60,10 @@ async function listOwnConfigs(db, deviceId) {
     name: row.name,
     downloads: row.downloads,
     assets_status: row.assets_status,
+    // Why the images were turned away, in the reviewer's own words. Only
+    // ever set alongside assets_status 'rejected'; absent when the reviewer
+    // left no note, and the client falls back to its generic sentence.
+    ...(row.assets_reject_reason ? { assets_reject_reason: row.assets_reject_reason } : {}),
     // 'active' or 'removed'. After the filter above, 'removed' can only mean
     // an admin takedown -- the client renders it as such without needing to
     // know why.

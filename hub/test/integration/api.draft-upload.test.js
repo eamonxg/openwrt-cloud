@@ -29,12 +29,41 @@ async function newDraft(assetKind = "favicon_png") {
   return { draft: await res.json(), asset };
 }
 
+async function newDraftWithBytes(assetKind, base64) {
+  const asset = await makeAsset(assetKind, base64);
+  const res = await SELF.fetch("https://hub.test/api/v1/themes/aurora/configs/draft", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      device_token: makeToken(),
+      name: "Draft " + Math.random(),
+      description: "",
+      payload: makePayload({
+        assets: [asset.manifest],
+        colors: {
+          light_bg: "#" + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0"),
+        },
+      }),
+    }),
+  });
+  const draft = await res.json();
+  return { draft, asset, entry: draft.assets[0] };
+}
+
 const put = (url, ticket, body) =>
   SELF.fetch("https://hub.test" + url, {
     method: "PUT",
     headers: { Authorization: "Bearer " + ticket, "content-type": "application/octet-stream" },
     body,
   });
+
+// A PNG whose IHDR claims a size the store will not take. Only the header
+// matters -- the gate never decodes -- so these carry no image data at all,
+// which is also the point: materialising 9000x4000 pixels to prove a header
+// check works would be silly.
+const PNG_9000X4000 = "iVBORw0KGgoAAAANSUhEUgAAIygAAA+gCAAAAACyQOg7AAAAAElFTkSuQmCC";
+const PNG_5000X5000 = "iVBORw0KGgoAAAANSUhEUgAAE4gAABOICAAAAAB489gXAAAAAElFTkSuQmCC";
+const PNG_7680X4320 = "iVBORw0KGgoAAAANSUhEUgAAHgAAABDgCAAAAACT+ktPAAAAAElFTkSuQmCC";
 
 describe("PUT /drafts/:id/assets/:kind", () => {
   it("stores bytes that match the ticket", async () => {
@@ -90,6 +119,51 @@ describe("PUT /drafts/:id/assets/:kind", () => {
     const { draft } = await newDraft("logo_svg");
     const entry = draft.assets[0];
     const res = await put(entry.url, entry.ticket, bytesOf(PNG_1X1_BASE64));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("bad_asset");
+  });
+  // Nothing downstream re-encodes these bytes any more, so this is the only
+  // place a decompression bomb is stopped -- and it is stopped while the
+  // sharer is still standing in front of the picker.
+  it("413 asset_too_large for a background over the 8192x8192 limit", async () => {
+    const { draft } = await newDraft("login_bg");
+    const entry = draft.assets[0];
+    const res = await put(entry.url, entry.ticket, bytesOf(PNG_1X1_BASE64));
+    expect(res.status).toBe(200);
+
+    const big = await newDraftWithBytes("login_bg", PNG_9000X4000);
+    const bigRes = await put(big.entry.url, big.entry.ticket, bytesOf(PNG_9000X4000));
+    expect(bigRes.status).toBe(413);
+    const body = await bigRes.json();
+    expect(body.error.code).toBe("asset_too_large");
+    // The message has to name the numbers, or it is not actionable.
+    expect(body.error.message).toMatch(/9000x4000.*8192x8192/);
+  });
+
+  it("holds an icon to the tighter 4096x4096 limit a background is spared", async () => {
+    const icon = await newDraftWithBytes("favicon_png", PNG_5000X5000);
+    const iconRes = await put(icon.entry.url, icon.entry.ticket, bytesOf(PNG_5000X5000));
+    expect(iconRes.status).toBe(413);
+    expect((await iconRes.json()).error.message).toMatch(/5000x5000.*4096x4096/);
+
+    // The very same pixels are fine in a slot meant for a wallpaper.
+    const bg = await newDraftWithBytes("main_bg", PNG_5000X5000);
+    const bgRes = await put(bg.entry.url, bg.entry.ticket, bytesOf(PNG_5000X5000));
+    expect(bgRes.status).toBe(200);
+  });
+
+  it("takes a real 8K wallpaper, which is the whole reason backgrounds get 8192", async () => {
+    const bg = await newDraftWithBytes("main_bg", PNG_7680X4320);
+    const res = await put(bg.entry.url, bg.entry.ticket, bytesOf(PNG_7680X4320));
+    expect(res.status).toBe(200);
+  });
+
+  it("400 bad_asset for bytes that pass the magic sniff but have no readable header", async () => {
+    // PNG signature, then nothing: the sniff is happy, the header is not
+    // there, and a file that will not say how big it is does not get stored.
+    const headerless = "iVBORw0KGgo=";
+    const draft = await newDraftWithBytes("favicon_png", headerless);
+    const res = await put(draft.entry.url, draft.entry.ticket, bytesOf(headerless));
     expect(res.status).toBe(400);
     expect((await res.json()).error.code).toBe("bad_asset");
   });

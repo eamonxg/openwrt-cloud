@@ -8,19 +8,6 @@ import {
   renderAlreadyApprovedPreview,
 } from "./review.js";
 
-// Mirrors APPROVE_FROM_R2_KINDS in src/assets.js — lifted verbatim from the
-// standalone queue card this drawer replaces. These kinds are still fetched
-// and previewed here, but their bytes never go back up: approve reads them
-// from pending/ server-side. A full-coverage CJK woff2 is several MB, and
-// base64ing two of them into the approve body is what used to push it past
-// the cap.
-//
-// The two lists are kept honest by the wire format rather than by discipline:
-// each entry declares which form it is using and approve rejects any
-// disagreement, so a kind that gains a real sanitizer here but stays in this
-// set fails immediately instead of silently approving unsanitized bytes.
-const APPROVE_FROM_R2_KINDS = new Set(["font_sans", "font_mono"]);
-
 let onChanged = () => {};
 let onOpenDevice = () => {};
 let currentId = null;
@@ -222,18 +209,18 @@ function renderAssetSection(detail) {
     section.append(el("div", { class: "card-actions" }, [approveBtn, rejectBtn]));
 
     approveBtn.addEventListener("click", async () => {
-      if (!confirm(`按预览里消毒后的字节批准「${detail.name}」?`)) return;
+      if (!confirm(`按预览里的字节批准「${detail.name}」?`)) return;
       approveBtn.disabled = true;
       try {
-        // 两种形式必须与后端的 APPROVE_FROM_R2_KINDS 一致:passthrough 的
-        // kind 由 Worker 自己从 pending/ 读,其余才把消毒后的字节发上去。
-        // 后端拒绝任何不一致,所以搞错这里会在批准时立刻炸,而不是悄悄放行
-        // 一份没消毒的字节。
+        // 谁被改写过由 sanitizeAsset 按字节判定(只有 SVG 会),这里照实申报:
+        // 改写过的把消毒后的字节发上去,没改写的让 Worker 自己从 pending/
+        // 原样拷过去。后端会对着 pending 的字节重新判一次,对不上就直接拒绝
+        // —— 所以搞错这里会在批准时立刻炸,而不是悄悄放行一份没消毒的字节。
         const body = {
           assets: pendingAssets.map((a) =>
-            APPROVE_FROM_R2_KINDS.has(a.kind)
-              ? { kind: a.kind, passthrough: true }
-              : { kind: a.kind, data_b64: bytesToBase64(results[a.kind].bytes) }
+            results[a.kind].rewritten
+              ? { kind: a.kind, data_b64: bytesToBase64(results[a.kind].bytes) }
+              : { kind: a.kind, passthrough: true }
           ),
         };
         await apiFetchJson(`/api/v1/admin/configs/${encodeURIComponent(detail.id)}/approve`, {
@@ -250,11 +237,23 @@ function renderAssetSection(detail) {
     });
 
     rejectBtn.addEventListener("click", async () => {
-      if (!confirm(`驳回「${detail.name}」的待审资产?`)) return;
+      // 理由是要发给作者看的,所以这里必须填,而且写英文 —— 对面收到的就是
+      // 这一句原文。没有理由的驳回,在作者那边和「图片凭空消失了」没区别。
+      const reason = prompt(
+        `驳回「${detail.name}」的待审资产。\n\n写一句英文说明,作者会原样看到它:`,
+        "",
+      );
+      if (reason === null) return;
+      if (!reason.trim()) {
+        alert("要写理由才能驳回 —— 作者只会看到你写的这一句。");
+        return;
+      }
       rejectBtn.disabled = true;
       try {
         await apiFetchJson(`/api/v1/admin/configs/${encodeURIComponent(detail.id)}/reject`, {
           method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason: reason.trim() }),
         });
       } catch (err) {
         fail("驳回", err);

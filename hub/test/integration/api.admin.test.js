@@ -1,7 +1,14 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { makeAsset, makePayload, makeToken, PNG_1X1_BASE64 } from "../helpers.js";
-import { ASSET_SIZE_LIMITS } from "../../src/validate.js";
+import {
+  makeAsset,
+  makePayload,
+  makeToken,
+  PNG_1X1_BASE64,
+  JPEG_1X1_BASE64,
+  WEBP_1X1_BASE64,
+} from "../helpers.js";
+import { ASSET_SIZE_LIMITS, ASSET_KINDS } from "../../src/validate.js";
 import { ADMIN_APPROVE_BODY_BYTES } from "../../src/admin.js";
 
 const SHARE_URL = "https://example.com/api/v1/themes/aurora/configs";
@@ -21,14 +28,13 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
-// A second PNG fixture, distinct bytes/hash from PNG_1X1_BASE64 — used as
-// the admin's "sanitized replacement" bytes during approve, so the test can
-// assert the stored sha256/size actually changed to the replacement's.
+// A second PNG fixture, distinct bytes/hash from PNG_1X1_BASE64. Since rasters
+// are stored as uploaded, its only remaining job is to be bytes approve must
+// refuse: a console offering a rewritten photo.
 const SANITIZED_PNG_BASE64 = bytesToBase64(
   new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xaa, 0xbb, 0xcc, 0xdd])
 );
-const SANITIZED_JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10, 0x45, 0x78, 0x69, 0x66]);
-const SANITIZED_JPEG_BASE64 = bytesToBase64(SANITIZED_JPEG_BYTES);
+
 
 async function shareWithAssets({ token = makeToken(), name = "Config", assetSpecs = [], colorSeed } = {}) {
   const assets = [];
@@ -283,12 +289,14 @@ describe("GET /api/v1/admin/assets/:id/:kind", () => {
 describe("POST /api/v1/admin/configs/:id/approve", () => {
   it("happy path: R2 approved/ written, pending/ deleted, assets row updated, public asset now serves", async () => {
     const { id } = await shareWithAssets({ assetSpecs: [{ kind: "favicon_png" }], colorSeed: "#220001" });
-    const sanitizedBytes = base64ToBytes(SANITIZED_PNG_BASE64);
+    // A raster is stored exactly as the sharer uploaded it, so the bytes to
+    // assert against are the uploaded ones, not a replacement.
+    const sanitizedBytes = base64ToBytes(PNG_1X1_BASE64);
 
     const res = await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ assets: [{ kind: "favicon_png", data_b64: SANITIZED_PNG_BASE64 }] }),
+      body: JSON.stringify({ assets: [{ kind: "favicon_png", passthrough: true }] }),
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id, approved: true });
@@ -317,20 +325,32 @@ describe("POST /api/v1/admin/configs/:id/approve", () => {
     expect(new Uint8Array(await publicRes.arrayBuffer())).toEqual(sanitizedBytes);
   });
 
-  it("re-sniffs login_bg's sanitized bytes and stores the matching format in customMetadata", async () => {
-    const { id } = await shareWithAssets({ assetSpecs: [{ kind: "login_bg" }], colorSeed: "#220002" });
+  // A wallpaper is never re-encoded, so the format it is served as is the
+  // format it was uploaded as -- both ways round, since login_bg takes PNG or
+  // JPEG and the two used to collapse into "whatever the console emitted".
+  it.each([
+    ["png", PNG_1X1_BASE64, "image/png", "#220002"],
+    ["jpeg", JPEG_1X1_BASE64, "image/jpeg", "#220012"],
+    ["webp", WEBP_1X1_BASE64, "image/webp", "#220022"],
+  ])("stores a %s login_bg byte-for-byte and serves it as its own format", async (
+    _label, base64, contentType, colorSeed
+  ) => {
+    const { id } = await shareWithAssets({
+      assetSpecs: [{ kind: "login_bg", base64 }],
+      colorSeed,
+    });
 
     const res = await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ assets: [{ kind: "login_bg", data_b64: SANITIZED_JPEG_BASE64 }] }),
+      body: JSON.stringify({ assets: [{ kind: "login_bg", passthrough: true }] }),
     });
     expect(res.status).toBe(200);
 
     const publicRes = await SELF.fetch(`https://example.com/assets/${id}/login_bg`);
     expect(publicRes.status).toBe(200);
-    expect(publicRes.headers.get("content-type")).toBe("image/jpeg");
-    await publicRes.arrayBuffer();
+    expect(publicRes.headers.get("content-type")).toBe(contentType);
+    expect(new Uint8Array(await publicRes.arrayBuffer())).toEqual(base64ToBytes(base64));
   });
 
   it("400 missing_asset when the body omits a kind the config has pending", async () => {
@@ -342,7 +362,7 @@ describe("POST /api/v1/admin/configs/:id/approve", () => {
     const res = await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ assets: [{ kind: "favicon_png", data_b64: SANITIZED_PNG_BASE64 }] }),
+      body: JSON.stringify({ assets: [{ kind: "favicon_png", passthrough: true }] }),
     });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: { code: "missing_asset", message: expect.any(String) } });
@@ -360,7 +380,7 @@ describe("POST /api/v1/admin/configs/:id/approve", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         assets: [
-          { kind: "favicon_png", data_b64: SANITIZED_PNG_BASE64 },
+          { kind: "favicon_png", passthrough: true },
           { kind: "logo_svg", data_b64: btoa('<svg xmlns="http://www.w3.org/2000/svg"></svg>') },
         ],
       }),
@@ -369,34 +389,112 @@ describe("POST /api/v1/admin/configs/:id/approve", () => {
     expect(await res.json()).toEqual({ error: { code: "missing_asset", message: expect.any(String) } });
   });
 
-  it("400 bad_asset when the replacement fails the magic-byte check for its kind", async () => {
-    const { id } = await shareWithAssets({ assetSpecs: [{ kind: "favicon_png" }], colorSeed: "#220005" });
+  // The gates below now only ever see SVG, since that is the only kind the
+  // console is allowed to hand back rewritten bytes for. They still matter:
+  // sanitizeSvg output is the one thing in the store that is not the bytes
+  // somebody already checked at upload.
+  it("400 bad_asset when the sanitized SVG fails the magic-byte check for its kind", async () => {
+    const SVG_BASE64 = btoa('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    const { id } = await shareWithAssets({
+      assetSpecs: [{ kind: "logo_svg", base64: SVG_BASE64 }],
+      colorSeed: "#220005",
+    });
 
     const res = await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ assets: [{ kind: "favicon_png", data_b64: btoa("not a png") }] }),
+      body: JSON.stringify({ assets: [{ kind: "logo_svg", data_b64: btoa("not an svg") }] }),
     });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: { code: "bad_asset", message: expect.any(String) } });
   });
 
-  it("400 bad_asset when the replacement exceeds the kind's size limit", async () => {
-    const { id } = await shareWithAssets({ assetSpecs: [{ kind: "favicon_png" }], colorSeed: "#220006" });
+  it("400 bad_asset when the sanitized SVG exceeds the kind's size limit", async () => {
+    const SVG_BASE64 = btoa('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    const { id } = await shareWithAssets({
+      assetSpecs: [{ kind: "logo_svg", base64: SVG_BASE64 }],
+      colorSeed: "#220006",
+    });
 
-    // 2 MiB limit for favicon_png; build a payload just over it that still
-    // starts with the PNG magic bytes.
-    const oversized = new Uint8Array(2 * 1024 * 1024 + 1);
-    oversized.set([0x89, 0x50, 0x4e, 0x47]);
-    const oversizedBase64 = bytesToBase64(oversized);
+    // 8 MiB limit for logo_svg; pad past it while staying recognisably SVG.
+    const oversizedBase64 = btoa("<svg" + " ".repeat(8 * 1024 * 1024));
 
     const res = await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ assets: [{ kind: "favicon_png", data_b64: oversizedBase64 }] }),
+      body: JSON.stringify({ assets: [{ kind: "logo_svg", data_b64: oversizedBase64 }] }),
     });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: { code: "bad_asset", message: expect.any(String) } });
+  });
+
+  // The two halves of the passthrough rule. Which form an entry must take is
+  // decided from the pending bytes, so a console that got it backwards --
+  // rewriting a photo, or quietly passing an unsanitized SVG through -- is
+  // turned away rather than obeyed.
+  it("400 missing_asset when a raster is sent as rewritten bytes", async () => {
+    const { id } = await shareWithAssets({ assetSpecs: [{ kind: "favicon_png" }], colorSeed: "#220007" });
+
+    const res = await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assets: [{ kind: "favicon_png", data_b64: SANITIZED_PNG_BASE64 }] }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: { code: "missing_asset", message: expect.any(String) } });
+
+    // And the rejected approve left the pending bytes exactly where they were.
+    expect(await env.R2.head(`pending/${id}/favicon_png`)).not.toBeNull();
+    expect((await configRow(id)).assets_status).toBe("pending");
+  });
+
+  it("400 missing_asset when an SVG is claimed as passthrough", async () => {
+    const SVG_BASE64 = btoa('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    const { id } = await shareWithAssets({
+      assetSpecs: [{ kind: "logo_svg", base64: SVG_BASE64 }],
+      colorSeed: "#220008",
+    });
+
+    const res = await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assets: [{ kind: "logo_svg", passthrough: true }] }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: { code: "missing_asset", message: expect.any(String) } });
+  });
+
+  // A toolbar icon is SVG or PNG depending on its author, which is exactly
+  // why the rule reads the bytes instead of the kind.
+  it("takes a PNG toolbar icon as passthrough and an SVG one as rewritten bytes", async () => {
+    const SVG_BASE64 = btoa('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    const { id } = await shareWithAssets({
+      assetSpecs: [
+        { kind: "toolbar_icon_0", base64: PNG_1X1_BASE64 },
+        { kind: "toolbar_icon_1", base64: SVG_BASE64 },
+      ],
+      colorSeed: "#220009",
+    });
+
+    const res = await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assets: [
+          { kind: "toolbar_icon_0", passthrough: true },
+          { kind: "toolbar_icon_1", data_b64: SVG_BASE64 },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const pngRes = await SELF.fetch(`https://example.com/assets/${id}/toolbar_icon_0`);
+    expect(pngRes.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await pngRes.arrayBuffer())).toEqual(base64ToBytes(PNG_1X1_BASE64));
+
+    const svgRes = await SELF.fetch(`https://example.com/assets/${id}/toolbar_icon_1`);
+    expect(svgRes.headers.get("content-type")).toBe("image/svg+xml");
+    await svgRes.arrayBuffer();
   });
 
   // -------------------------------------------------------------------------
@@ -456,11 +554,10 @@ describe("POST /api/v1/admin/configs/:id/approve", () => {
     // logo_svg, which has no pending/ bytes left) -> 400 missing_asset,
     // deadlocking approval forever. After the fix, submitting ONLY the
     // pending favicon_ico kind is exactly the required set -> 200.
-    const sanitizedIco = bytesToBase64(new Uint8Array([0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x20, 0x20]));
     const approveRes = await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ assets: [{ kind: "favicon_ico", data_b64: sanitizedIco }] }),
+      body: JSON.stringify({ assets: [{ kind: "favicon_ico", passthrough: true }] }),
     });
     expect(approveRes.status).toBe(200);
     expect(await approveRes.json()).toEqual({ id, approved: true });
@@ -477,13 +574,12 @@ describe("POST /api/v1/admin/configs/:id/approve", () => {
     expect(logoRes.status).toBe(200);
     await logoRes.arrayBuffer();
 
-    // favicon_ico: freshly approved with the sanitized replacement bytes,
-    // and now served too.
+    // favicon_ico: freshly approved, serving the bytes the owner uploaded.
     const finalIcoAsset = await assetRow(id, "favicon_ico");
     expect(finalIcoAsset.status).toBe("approved");
     const icoRes = await SELF.fetch(`https://example.com/assets/${id}/favicon_ico`);
     expect(icoRes.status).toBe(200);
-    expect(new Uint8Array(await icoRes.arrayBuffer())).toEqual(base64ToBytes(sanitizedIco));
+    expect(new Uint8Array(await icoRes.arrayBuffer())).toEqual(base64ToBytes(icoBase64));
   });
 
   it("400 missing_asset when the body includes an already-approved kind alongside the pending one (exact-set invariant)", async () => {
@@ -601,6 +697,162 @@ describe("POST /api/v1/admin/configs/:id/reject", () => {
     expect(listBody.items.map((i) => i.id)).toContain(id);
   });
 
+  // 驳回如果不带理由,作者那边和「图片凭空消失了」没有区别。这一组盯的就是
+  // 那句话从审核台一路走到作者列表里。
+  describe("the reason reaches the author", () => {
+    const shareUrl = "https://example.com/api/v1/themes/aurora/configs";
+
+    // The author's own view of their shares -- the only surface a rejection
+    // reason ever has to reach.
+    const myShares = async (token) => {
+      const res = await SELF.fetch("https://example.com/api/v1/me", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_token: token }),
+      });
+      return (await res.json()).configs;
+    };
+
+    it("stores the reason and hands it back on the author's own listing", async () => {
+      const token = makeToken();
+      const { id } = await shareWithAssets({
+        token,
+        assetSpecs: [{ kind: "login_bg" }],
+        colorSeed: "#280001",
+      });
+
+      const res = await adminFetch(`/api/v1/admin/configs/${id}/reject`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: "The wallpaper shows a copyrighted film still." }),
+      });
+      expect(res.status).toBe(200);
+
+      const [mine] = await myShares(token);
+      expect(mine.id).toBe(id);
+      expect(mine.assets_status).toBe("rejected");
+      expect(mine.assets_reject_reason).toBe("The wallpaper shows a copyrighted film still.");
+    });
+
+    it("omits the field entirely when the reviewer left no note", async () => {
+      const token = makeToken();
+      const { id } = await shareWithAssets({
+        token,
+        assetSpecs: [{ kind: "login_bg" }],
+        colorSeed: "#280002",
+      });
+
+      await adminFetch(`/api/v1/admin/configs/${id}/reject`, { method: "POST" });
+
+      const [mine] = await myShares(token);
+      expect(mine.assets_status).toBe("rejected");
+      // Absent, not empty-string: the client falls back to its own generic
+      // sentence rather than rendering a blank quote block.
+      expect(mine).not.toHaveProperty("assets_reject_reason");
+    });
+
+    it("strips control characters and caps the length", async () => {
+      const token = makeToken();
+      const { id } = await shareWithAssets({
+        token,
+        assetSpecs: [{ kind: "login_bg" }],
+        colorSeed: "#280003",
+      });
+
+      await adminFetch(`/api/v1/admin/configs/${id}/reject`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: "line one\nline two\u0000" + "x".repeat(900) }),
+      });
+
+      const [mine] = await myShares(token);
+      expect(mine.assets_reject_reason.length).toBe(500);
+      expect(mine.assets_reject_reason).toMatch(/^line one line two/);
+      expect(mine.assets_reject_reason).not.toMatch(/[\u0000-\u001f]/);
+    });
+
+    it("clears the reason once the author resubmits", async () => {
+      const token = makeToken();
+      const { id } = await shareWithAssets({
+        token,
+        name: "Fix Me",
+        assetSpecs: [{ kind: "login_bg" }],
+        colorSeed: "#280004",
+      });
+      await adminFetch(`/api/v1/admin/configs/${id}/reject`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: "Too dark to read the login card over." }),
+      });
+      expect((await myShares(token))[0].assets_reject_reason).toBeTruthy();
+
+      // The author does what the note asked: a different wallpaper.
+      const replacement = await makeAsset("login_bg", JPEG_1X1_BASE64);
+      const putRes = await SELF.fetch(`${shareUrl}/${id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          device_token: token,
+          name: "Fix Me",
+          payload: makePayload({
+            colors: { light_bg: "#280005" },
+            assets: [replacement.manifest],
+          }),
+          assets: [replacement.body],
+        }),
+      });
+      expect(putRes.status).toBe(200);
+
+      const [mine] = await myShares(token);
+      expect(mine.assets_status).toBe("pending");
+      expect(mine).not.toHaveProperty("assets_reject_reason");
+    });
+
+    it("keeps no reason on a config that still has approved assets left", async () => {
+      const SVG_BASE64 = btoa('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+      const token = makeToken();
+      const { id } = await shareWithAssets({
+        token,
+        name: "Half Rejected",
+        assetSpecs: [{ kind: "logo_svg", base64: SVG_BASE64 }],
+        colorSeed: "#280006",
+      });
+      await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ assets: [{ kind: "logo_svg", data_b64: SVG_BASE64 }] }),
+      });
+
+      // Add a second asset, then reject only that one.
+      const logo = await makeAsset("logo_svg", SVG_BASE64);
+      const bg = await makeAsset("login_bg", PNG_1X1_BASE64);
+      await SELF.fetch(`${shareUrl}/${id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          device_token: token,
+          name: "Half Rejected",
+          payload: makePayload({
+            colors: { light_bg: "#280007" },
+            assets: [logo.manifest, bg.manifest],
+          }),
+          assets: [logo.body, bg.body],
+        }),
+      });
+      await adminFetch(`/api/v1/admin/configs/${id}/reject`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: "Only the background was a problem." }),
+      });
+
+      // Back to a normal listing -- an explanation about a kind that no
+      // longer exists would only puzzle the author.
+      const [mine] = await myShares(token);
+      expect(mine.assets_status).toBe("approved");
+      expect(mine).not.toHaveProperty("assets_reject_reason");
+    });
+  });
+
   it("mixed pending+approved state: reject drops only the pending kind, leaves the approved kind live", async () => {
     const SVG_BASE64 = btoa('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
     const token = makeToken();
@@ -701,7 +953,7 @@ describe("POST /api/v1/admin/configs/:id/takedown", () => {
     await adminFetch(`/api/v1/admin/configs/${id}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ assets: [{ kind: "favicon_png", data_b64: SANITIZED_PNG_BASE64 }] }),
+      body: JSON.stringify({ assets: [{ kind: "favicon_png", passthrough: true }] }),
     });
 
     const res = await adminFetch(`/api/v1/admin/configs/${id}/takedown`, { method: "POST" });
@@ -761,7 +1013,7 @@ describe("POST /api/v1/admin/devices/:device_id/ban", () => {
     await adminFetch(`/api/v1/admin/configs/${idA}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ assets: [{ kind: "favicon_png", data_b64: SANITIZED_PNG_BASE64 }] }),
+      body: JSON.stringify({ assets: [{ kind: "favicon_png", passthrough: true }] }),
     });
     const { id: idB } = await shareWithAssets({
       token,
@@ -1042,18 +1294,22 @@ describe("admin approve: fonts come from pending/, not the body", () => {
     expect(await assetRow(id, "font_mono")).toMatchObject({ status: "pending" });
   });
 
-  // The size arithmetic that made this necessary, asserted rather than
-  // narrated: with fonts in the body, a maxed-out config would not fit.
-  it("a maxed-out config's images fit the approve cap once fonts are out of the body", async () => {
-    const IMAGE_KINDS = ["logo_svg", "favicon_png", "favicon_ico", "pwa_icon_192", "pwa_icon_512", "login_bg"];
+  // The size arithmetic that makes the passthrough rule load-bearing,
+  // asserted rather than narrated.
+  it("a maxed-out config fits the approve cap because only SVG travels in the body", async () => {
     const base64Size = (bytes) => Math.ceil(bytes / 3) * 4;
-    const imagesOnly = IMAGE_KINDS.reduce((sum, kind) => sum + base64Size(ASSET_SIZE_LIMITS[kind]), 0);
-    const withFonts =
-      imagesOnly +
-      base64Size(ASSET_SIZE_LIMITS.font_sans) +
-      base64Size(ASSET_SIZE_LIMITS.font_mono);
+    // The only kinds that can ever be rewritten, and so the only ones whose
+    // bytes reach the body: a logo and twelve toolbar icons, all SVG.
+    const rewritable = ASSET_KINDS.filter(
+      (kind) => kind === "logo_svg" || kind.startsWith("toolbar_icon_")
+    );
+    const worstBody = rewritable.reduce((sum, kind) => sum + base64Size(ASSET_SIZE_LIMITS[kind]), 0);
+    expect(worstBody).toBeLessThan(ADMIN_APPROVE_BODY_BYTES);
 
-    expect(imagesOnly).toBeLessThan(ADMIN_APPROVE_BODY_BYTES);
-    expect(withFonts).toBeGreaterThan(ADMIN_APPROVE_BODY_BYTES);
+    // And the shape this replaced -- every asset base64ed into one body --
+    // would now blow straight past it, which is why the copy happens
+    // server-side instead.
+    const everything = ASSET_KINDS.reduce((sum, kind) => sum + base64Size(ASSET_SIZE_LIMITS[kind]), 0);
+    expect(everything).toBeGreaterThan(ADMIN_APPROVE_BODY_BYTES);
   });
 });

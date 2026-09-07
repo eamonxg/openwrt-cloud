@@ -18,19 +18,16 @@ export function bytesToBase64(bytes) {
 // Per-kind sanitation
 // -----------------------------------------------------------------------------
 
-// createImageBitmap + canvas re-encode to PNG strips any embedded
-// metadata/polyglot tricks in raster formats — this applies to every
-// browser-decodable raster kind except favicon_ico (see note below).
-const CANVAS_REENCODE_KINDS = new Set(["favicon_png", "pwa_icon_192", "pwa_icon_512", "login_bg", "main_bg"]);
-const MAX_IMAGE_DIMENSION = 4096;
-// Full-page backgrounds legitimately arrive as 5K/6K wallpapers; the store's
-// 2 MiB byte cap already bounds decode cost, so they get a wider pixel budget
-// than icons instead of being shareable-but-never-approvable.
-const MAX_BG_DIMENSION = 8192;
-const isBgKind = (kind) => kind === "login_bg" || kind === "main_bg";
-// Mirrors validate.js's OTHER_ASSET_LIMIT: approve rejects re-encoded bytes
-// past this, so the re-encoder below must aim under it, not just decode.
-const BG_APPROVE_LIMIT = 2 * 1024 * 1024;
+// Raster kinds are never rewritten -- the sharer's bytes are the bytes the
+// store keeps (src/assets.js, approveRewritesBytes). They are still decoded
+// here, but only to answer the two questions a reviewer needs answered: does
+// it render, and what is it a picture of. The decoded bitmap is thrown away
+// and the original bytes go to approve untouched.
+//
+// favicon_ico is left out because createImageBitmap support for ICO is not
+// something to bet an un-approvable asset on; it gets a plain <img> preview
+// like it always has.
+const RENDER_CHECK_KINDS = new Set(["favicon_png", "pwa_icon_192", "pwa_icon_512", "login_bg", "main_bg"]);
 
 // A toolbar shortcut icon is SVG or PNG depending on what its author uploaded,
 // so its sanitizer is picked from the bytes rather than from the kind: running
@@ -116,9 +113,15 @@ export function renderAlreadyApprovedPreview(tile, kind, result) {
   }
 }
 
-// Returns { ok: true, bytes, blob, previewKind } or { ok: false, message }.
-// Never throws — every failure path here is a sanitize failure the caller
-// surfaces on the card and uses to disable "Approve".
+// Returns { ok: true, rewritten, bytes, blob, previewKind, dimensions? } or
+// { ok: false, message }. `rewritten` is the console's half of the approve
+// contract: true means these are sanitized bytes that must be posted back,
+// false means the stored bytes stand as they are and approve copies them
+// server-side. Approve re-derives the same answer from the pending object and
+// rejects any disagreement, so the two cannot drift.
+//
+// Never throws — every failure path here is one the caller surfaces on the
+// card and uses to disable "Approve".
 export async function sanitizeAsset(configId, kind) {
   let fetched;
   try {
@@ -129,88 +132,51 @@ export async function sanitizeAsset(configId, kind) {
   const { bytes, contentType } = fetched;
   const svgIcon = isToolbarIconKind(kind) && looksLikeSvg(bytes, contentType);
 
+  // SVG is the only format that gets rewritten, because it is the only one
+  // that is a document rather than a picture: it can carry script, external
+  // references and CSS, and sanitizeSvg is what takes them away.
   if (kind === "logo_svg" || svgIcon) {
     try {
       const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
       const sanitized = sanitizeSvg(text);
       const outBytes = new TextEncoder().encode(sanitized);
       const blob = new Blob([outBytes], { type: "image/svg+xml" });
-      return { ok: true, bytes: outBytes, blob, previewKind: "svg" };
+      return { ok: true, rewritten: true, bytes: outBytes, blob, previewKind: "svg" };
     } catch (err) {
       return { ok: false, message: "SVG sanitize failed: " + (err.message || err) };
     }
   }
 
-  if (CANVAS_REENCODE_KINDS.has(kind) || isToolbarIconKind(kind)) {
+  const storedBlob = new Blob([bytes], { type: contentType || "application/octet-stream" });
+
+  // A raster is decoded but not rewritten. Approving means "I looked at these
+  // bytes", and a picture that will not render is one nobody looked at — so
+  // a failed decode still blocks the button, it just no longer costs the
+  // sharer their image quality to find out.
+  if (RENDER_CHECK_KINDS.has(kind) || isToolbarIconKind(kind)) {
     let bitmap;
     try {
-      const srcBlob = new Blob([bytes], { type: contentType || "image/png" });
-      bitmap = await createImageBitmap(srcBlob);
+      bitmap = await createImageBitmap(storedBlob);
     } catch (err) {
       return { ok: false, message: "Not a decodable image." };
     }
     // Read the dimensions BEFORE close(): a closed ImageBitmap reports 0x0,
     // which used to turn every oversized wallpaper into a baffling "(0x0)".
-    const bmWidth = bitmap.width;
-    const bmHeight = bitmap.height;
-    const cap = isBgKind(kind) ? MAX_BG_DIMENSION : MAX_IMAGE_DIMENSION;
-    if (bmWidth > cap || bmHeight > cap) {
-      bitmap.close();
-      return {
-        ok: false,
-        message: "Image exceeds the " + cap + "x" + cap + " cap (" +
-          bmWidth + "x" + bmHeight + ").",
-      };
-    }
-    try {
-      const canvas = document.createElement("canvas");
-      canvas.width = bmWidth;
-      canvas.height = bmHeight;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(bitmap, 0, 0);
-      bitmap.close();
-      // The bg kinds re-encode to JPEG, stepping the quality down until the
-      // bytes fit the store's 2 MiB asset cap: a canvas PNG of a photo
-      // balloons well past it, which quietly resurrected the
-      // shareable-but-never-approvable failure right here at approve time.
-      // Backgrounds are full-bleed photos, so JPEG's lack of alpha is free.
-      if (isBgKind(kind)) {
-        for (const quality of [0.92, 0.85, 0.75, 0.65]) {
-          const jpegBlob = await new Promise((resolve) =>
-            canvas.toBlob(resolve, "image/jpeg", quality)
-          );
-          if (!jpegBlob) throw new Error("canvas.toBlob returned null.");
-          if (jpegBlob.size <= BG_APPROVE_LIMIT) {
-            const outBytes = new Uint8Array(await jpegBlob.arrayBuffer());
-            return { ok: true, bytes: outBytes, blob: jpegBlob, previewKind: "image" };
-          }
-        }
-        return {
-          ok: false,
-          message: "Re-encoded image cannot fit the 2 MiB store cap.",
-        };
-      }
-      // Every other raster kind still lands as PNG, per the functional
-      // contract (icons want lossless + alpha).
-      const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-      if (!pngBlob) throw new Error("canvas.toBlob returned null.");
-      const outBytes = new Uint8Array(await pngBlob.arrayBuffer());
-      return { ok: true, bytes: outBytes, blob: pngBlob, previewKind: "image" };
-    } catch (err) {
-      return { ok: false, message: "Re-encode failed: " + (err.message || err) };
-    }
+    const dimensions = bitmap.width + "x" + bitmap.height;
+    bitmap.close();
+    return { ok: true, rewritten: false, bytes, blob: storedBlob, previewKind: "image", dimensions };
   }
 
-  // favicon_ico: deliberately NOT canvas-reencoded. canvas.toBlob only ever
-  // produces png/jpeg/webp — never ico — and the admin approve endpoint
-  // (src/admin.js, MAGIC_CHECKS.favicon_ico = isIco) requires the ICO magic
-  // bytes (00 00 01 00) to survive into the approved asset. Re-encoding
-  // this kind to PNG would make it permanently impossible to approve.
-  // font_sans/font_mono (woff2): passthrough — the magic bytes were already
-  // checked at upload time (assets.js), same rationale as the brief's
-  // explicit woff2 passthrough.
-  const blob = new Blob([bytes], { type: contentType || "application/octet-stream" });
-  return { ok: true, bytes, blob, previewKind: kind === "favicon_ico" ? "image" : "font" };
+  // favicon_ico and the woff2 fonts: no decode step to offer. The ICO magic
+  // bytes were checked at upload and are re-checked at approve; a font is
+  // shown as rendered text rather than as a picture.
+  return {
+    ok: true,
+    rewritten: false,
+    bytes,
+    blob: storedBlob,
+    previewKind: kind === "favicon_ico" ? "image" : "font",
+  };
 }
 
 export function renderAssetPreview(tile, kind, result) {
@@ -226,7 +192,14 @@ export function renderAssetPreview(tile, kind, result) {
   }
 
   stateLine.className = "state-ok";
-  stateLine.textContent = "sanitized ok (" + result.bytes.length + " bytes)";
+  // The reviewer needs to know which of the two things they are looking at:
+  // bytes this console rewrote, or the sharer's own bytes about to be stored
+  // verbatim.
+  const detail = result.bytes.length + " bytes" +
+    (result.dimensions ? ", " + result.dimensions : "");
+  stateLine.textContent = result.rewritten
+    ? "sanitized ok (" + detail + ")"
+    : "stored as uploaded (" + detail + ")";
 
   const url = URL.createObjectURL(result.blob);
   if (result.previewKind === "svg" || result.previewKind === "image") {

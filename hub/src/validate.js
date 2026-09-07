@@ -22,13 +22,16 @@ export const ASSET_KINDS = [
 ];
 
 const FONT_ASSET_LIMIT = 8388608; // 8 MiB
-const OTHER_ASSET_LIMIT = 2097152; // 2 MiB
-// A toolbar icon renders at 20px. It gets its own, much smaller limit because
-// twelve of them at the image limit would be 24 MiB on their own — approve
-// carries every non-passthrough kind's bytes in one JSON body capped at
-// ADMIN_APPROVE_BODY_BYTES (25 MB), so that is the "shareable but never
-// approvable" failure the font work already had to dig out once.
-// Worst case now: 7*2 MiB + 12*256 KiB = 17 MiB, ~23 MB base64.
+// One number for everything a sharer uploads through the Studio's asset
+// library, matching the picker's own 8 MB cap: what you can set on your
+// router is what you can share. It used to be 2 MiB, which was the cap the
+// review console then tried to squeeze a wallpaper back under by
+// re-encoding it -- degrading the image to fit a limit the sharer had
+// already been told they were inside.
+const OTHER_ASSET_LIMIT = 8388608; // 8 MiB
+// A toolbar icon renders at 20px, so it gets its own, much smaller limit:
+// twelve of them at the image limit would be 24 MiB of a single config on
+// their own, all of it downloaded by every router that applies it.
 const TOOLBAR_ICON_ASSET_LIMIT = 262144; // 256 KiB
 
 function assetSizeLimit(kind) {
@@ -296,8 +299,21 @@ function validateAssetItem(item, seenKinds) {
 
   if (typeof sha256 !== "string" || !SHA256_PATTERN.test(sha256)) throw badAssets();
 
-  if (!Number.isInteger(size) || size <= 0 || size > ASSET_SIZE_LIMITS[kind]) {
-    throw badAssets();
+  if (!Number.isInteger(size) || size <= 0) throw badAssets();
+
+  // Oversize gets its own code and a message that names the slot, the size
+  // and the limit. It is the one bad-assets case a sharer can actually act
+  // on, and it is decided here -- from the manifest, before a single byte
+  // moves -- so the router can say "your main background is 3.4 MB, the
+  // limit is 2 MB" instead of failing halfway through the upload loop with a
+  // generic error, or (worse) uploading fine and dying unapprovably at
+  // review.
+  if (size > ASSET_SIZE_LIMITS[kind]) {
+    throw new HttpError(
+      413,
+      "asset_too_large",
+      `Asset ${kind} is ${size} bytes, over the ${ASSET_SIZE_LIMITS[kind]} byte limit.`
+    );
   }
 
   return { kind, sha256, size };

@@ -53,21 +53,24 @@ describe("exported constants", () => {
     ]);
   });
 
-  it("ASSET_SIZE_LIMITS: fonts 8 MiB, toolbar icons 256 KiB, the rest 2 MiB", () => {
+  it("ASSET_SIZE_LIMITS: toolbar icons 256 KiB, everything else 8 MiB", () => {
     for (const kind of ASSET_KINDS) {
-      let expected = 2097152;
-      if (kind === "font_sans" || kind === "font_mono") expected = 8388608;
-      else if (kind.startsWith("toolbar_icon_")) expected = 262144;
+      const expected = kind.startsWith("toolbar_icon_") ? 262144 : 8388608;
       expect(ASSET_SIZE_LIMITS[kind]).toBe(expected);
     }
   });
 
-  // 一份资产拉满的配置必须仍然批得下来。approve 把每个非 passthrough 的 kind
-  // 的字节装进一个 JSON body，上限 ADMIN_APPROVE_BODY_BYTES（25 MB）；字体走
-  // passthrough 所以不进 body。这一条守的就是「能分享但永远批不了」不再出现。
+  // 一份资产拉满的配置必须仍然批得下来。approve 只有被改写过的字节要装进
+  // JSON body（上限 ADMIN_APPROVE_BODY_BYTES，25 MB），而只有 SVG 会被改写,
+  // 其余一律在 Worker 里从 pending/ 原样拷到 approved/。这一条守的就是
+  // 「能分享但永远批不了」不再出现。
   it("a fully-loaded config still fits the approve body", () => {
+    // Only SVG travels in the approve body now (assets.js,
+    // approveRewritesBytes) -- every other kind is copied pending/ ->
+    // approved/ inside the Worker. The worst case is therefore a logo plus
+    // twelve SVG toolbar icons, not every asset the config has.
     const inBody = ASSET_KINDS.filter(
-      (kind) => kind !== "font_sans" && kind !== "font_mono"
+      (kind) => kind === "logo_svg" || kind.startsWith("toolbar_icon_")
     );
     const raw = inBody.reduce((sum, kind) => sum + ASSET_SIZE_LIMITS[kind], 0);
     // base64 是 4/3，再给 JSON 结构留点余量
@@ -650,8 +653,8 @@ describe("validatePayload - assets", () => {
   });
 
   it.each([
-    ["logo_svg", 2097152, true],
-    ["logo_svg", 2097153, false],
+    ["logo_svg", 8388608, true],
+    ["logo_svg", 8388609, false],
     ["font_sans", 8388608, true],
     ["font_sans", 8388609, false],
     ["font_mono", 8388608, true],
@@ -661,8 +664,18 @@ describe("validatePayload - assets", () => {
     if (shouldPass) {
       expect(() => validatePayload(payload)).not.toThrow();
     } else {
-      expectHttpError(() => validatePayload(payload), 400, "bad_assets");
+      // Oversize is the one bad-assets case with its own code and a message
+      // the sharer can act on, so it is checked as such rather than lumped
+      // in with the generic malformed-manifest rejections.
+      expectHttpError(() => validatePayload(payload), 413, "asset_too_large");
     }
+  });
+
+  it("names the slot, the size and the limit when an asset is oversize", () => {
+    const payload = buildPayload({
+      assets: [{ kind: "login_bg", sha256: "a".repeat(64), size: 12582912 }],
+    });
+    expect(() => validatePayload(payload)).toThrow(/login_bg is 12582912 bytes.*8388608 byte limit/);
   });
 
   it("rejects a zero or negative size", () => {

@@ -25,9 +25,9 @@ function bytesToBase64(bytes) {
 // A second valid PNG fixture, distinct from helpers.js's PNG_1X1_BASE64 —
 // only the 4-byte magic prefix is checked by the share/update pipeline, so
 // arbitrary trailing bytes are fine and this hashes differently.
-const ALT_PNG_BASE64 = bytesToBase64(
-  new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xff, 0xee, 0xee])
-);
+// A real 2x2 PNG: distinct bytes and hash from PNG_1X1_BASE64, with a header
+// the ingest dimension gate can actually read.
+const ALT_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAAAAABX3VL4AAAADklEQVR4nGNoaGBoaAAABgYCASzBUNcAAAAASUVORK5CYII=";
 
 // Minimal bytes passing the ICO magic-byte sniff (00 00 01 00 ...), used
 // alongside favicon_png to exercise the multi-kind assets_status recompute.

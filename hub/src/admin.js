@@ -13,19 +13,17 @@ import {
   contentTypeFor,
   isFormatTrackedKind,
   sniffFormat,
-  APPROVE_FROM_R2_KINDS,
+  approveRewritesBytes,
 } from "./assets.js";
 import { ASSET_SIZE_LIMITS } from "./validate.js";
 import { softTakedown } from "./lifecycle.js";
 
-// Approve bodies carry base64 sanitized assets: all kinds together can
-// exceed the general 12 MB request cap once base64 overhead is counted (an
-// 8 MB font alone is ~10.7 MB base64-encoded), so admin approve gets its own,
-// larger streaming cap. This is also the real ceiling on FONT_ASSET_LIMIT:
-// two max-size fonts plus images must still fit here, so raising the font
-// limit without raising this would mint configs that can be shared but never
-// approved. Lifting it for real means not round-tripping bytes through a JSON
-// body at all (read pending/ from R2, copy to approved/ in place).
+// Approve bodies carry base64 sanitized assets, which since the passthrough
+// rule (assets.js, approveRewritesBytes) means SVG only: everything else is
+// copied pending/ -> approved/ inside the Worker and never touches this body.
+// A config's SVGs cannot come close to the cap, so this is no longer the
+// ceiling on FONT_ASSET_LIMIT it once was -- it is just a bound on a body
+// that should now always be small.
 export const ADMIN_APPROVE_BODY_BYTES = 25 * 1024 * 1024;
 
 async function parseJsonBody(request, maxBytes) {
@@ -133,7 +131,7 @@ async function getPendingAsset(request, env, id, kind) {
   // update flow wrote for every format-tracked kind, so Content-Type reflects
   // the actual sniffed format rather than assuming the kind's default. The
   // console branches on this header to pick a sanitizer, so a toolbar icon
-  // mislabelled here would be an SVG fed to the canvas re-encoder.
+  // mislabelled here would be an SVG that never went through sanitizeSvg.
   const headers = {
     "content-type": contentTypeFor(kind, object.customMetadata?.format),
     "cache-control": "no-store",
@@ -187,11 +185,11 @@ async function approveConfig(request, env, id) {
 
   // An entry either carries sanitized bytes (data_b64) or declares that this
   // kind is passed through untouched, in which case approve reads the bytes
-  // from pending/ itself. The two forms are not interchangeable: a kind in
-  // APPROVE_FROM_R2_KINDS must use the passthrough form and every other kind
-  // must carry bytes. That strictness is the point -- if the console ever
-  // starts rewriting a kind listed here (or stops rewriting one that is not),
-  // approve fails loudly instead of quietly storing bytes nobody sanitized.
+  // from pending/ itself. Which form is correct is not a property of the kind
+  // -- it is a property of the stored bytes (only SVG is ever rewritten, and
+  // a toolbar icon is SVG or PNG depending on its author), so the two are
+  // matched up against the real pending object further down. Here the entries
+  // only have to be well-formed and pick exactly one of the two shapes.
   const byKind = new Map();
   for (const entry of body.assets) {
     if (
@@ -205,24 +203,20 @@ async function approveConfig(request, env, id) {
       throw new HttpError(400, "missing_asset", "Duplicate asset kind in request body.");
     }
 
-    const fromR2 = APPROVE_FROM_R2_KINDS.has(entry.kind);
-    if (fromR2) {
-      if (entry.passthrough !== true || entry.data_b64 !== undefined) {
-        throw new HttpError(
-          400,
-          "missing_asset",
-          `Asset ${entry.kind} is approved from stored bytes; send { passthrough: true } and no data_b64.`
-        );
-      }
-    } else if (typeof entry.data_b64 !== "string" || entry.passthrough !== undefined) {
+    const passthrough = entry.passthrough === true;
+    const carriesBytes = typeof entry.data_b64 === "string";
+    // Exactly one of the two shapes, and `passthrough` may only ever be true:
+    // "passthrough: false" alongside bytes reads like a deliberate statement
+    // and is more likely a bug than an intent.
+    if (passthrough === carriesBytes || (entry.passthrough !== undefined && !passthrough)) {
       throw new HttpError(
         400,
         "missing_asset",
-        `Asset ${entry.kind} must carry sanitized data_b64.`
+        `Asset ${entry.kind} must carry either sanitized data_b64 or { passthrough: true }.`
       );
     }
 
-    byKind.set(entry.kind, fromR2 ? null : entry.data_b64);
+    byKind.set(entry.kind, passthrough ? null : entry.data_b64);
   }
 
   // The body must cover EXACTLY the config's PENDING asset kinds — no fewer
@@ -240,24 +234,38 @@ async function approveConfig(request, env, id) {
 
   const resolved = [];
   for (const kind of expectedKinds) {
-    let bytes;
-    if (APPROVE_FROM_R2_KINDS.has(kind)) {
-      // These bytes were checked once on the way in (drafts.js), but they
-      // have been sitting in storage since; re-running the same gates costs
-      // nothing here and means both approve paths carry identical guarantees
-      // rather than one of them trusting the bucket.
-      const object = await env.R2.get(r2Key("pending", id, kind));
-      if (!object) {
-        throw new HttpError(
-          409,
-          "assets_incomplete",
-          `Asset ${kind} has no pending bytes to approve.`
-        );
-      }
-      bytes = new Uint8Array(await object.arrayBuffer());
-    } else {
-      bytes = base64ToBytes(byKind.get(kind));
+    // The pending bytes are read for every kind, not just the passed-through
+    // ones: they are what decides which form the console owed us. These bytes
+    // were checked once on the way in (drafts.js), but they have been sitting
+    // in storage since; re-running the same gates below costs nothing and
+    // means both approve paths carry identical guarantees rather than one of
+    // them trusting the bucket.
+    const object = await env.R2.get(r2Key("pending", id, kind));
+    if (!object) {
+      throw new HttpError(
+        409,
+        "assets_incomplete",
+        `Asset ${kind} has no pending bytes to approve.`
+      );
     }
+    const pendingBytes = new Uint8Array(await object.arrayBuffer());
+
+    // A console that stopped sanitizing an SVG, or started rewriting a raster
+    // it has no business touching, fails here rather than quietly storing the
+    // wrong bytes.
+    const declaredPassthrough = byKind.get(kind) === null;
+    const shouldRewrite = approveRewritesBytes(pendingBytes);
+    if (shouldRewrite === declaredPassthrough) {
+      throw new HttpError(
+        400,
+        "missing_asset",
+        shouldRewrite
+          ? `Asset ${kind} is SVG and must carry sanitized data_b64.`
+          : `Asset ${kind} is stored as uploaded; send { passthrough: true } and no data_b64.`
+      );
+    }
+
+    const bytes = shouldRewrite ? base64ToBytes(byKind.get(kind)) : pendingBytes;
 
     const check = MAGIC_CHECKS[kind];
     if (!check || !check(bytes)) {
@@ -270,10 +278,10 @@ async function approveConfig(request, env, id) {
     }
 
     const sha256 = await sha256Hex(bytes);
-    // Sniffed from the bytes the console actually returned, never assumed
-    // from what it was asked to do: it re-encodes the bg kinds (login_bg /
-    // main_bg) to jpeg, and leaves a toolbar icon in whichever of SVG/PNG it
-    // arrived as. MAGIC_CHECKS ran above, so this cannot come back null.
+    // Sniffed from the bytes actually being stored, never assumed from the
+    // kind: a bg is PNG or JPEG and a toolbar icon is PNG or SVG, whichever
+    // its author uploaded. MAGIC_CHECKS ran above, so this cannot come back
+    // null.
     const format = sniffFormat(kind, bytes);
     resolved.push({ kind, bytes, size: bytes.byteLength, sha256, format });
   }
@@ -308,7 +316,11 @@ async function approveConfig(request, env, id) {
     .bind(id)
     .first();
   const newAssetsStatus = stillPending.n > 0 ? "pending" : "approved";
-  await env.DB.prepare("UPDATE configs SET assets_status = ?, updated_at = datetime('now') WHERE id = ?")
+  // Clears whatever the last rejection said: the author did what it asked.
+  await env.DB.prepare(
+    `UPDATE configs SET assets_status = ?, assets_reject_reason = NULL, updated_at = datetime('now')
+      WHERE id = ?`
+  )
     .bind(newAssetsStatus, id)
     .run();
 
@@ -328,8 +340,27 @@ async function approveConfig(request, env, id) {
 // #12 POST /api/v1/admin/configs/:id/reject
 // ---------------------------------------------------------------------------
 
+// A rejection the author cannot act on is just a disappearance. The reason
+// travels with the row so it can be shown next to their own share, in the
+// admin's own words -- English, single language, no code-and-catalogue
+// indirection: one person writes these, and the useful half (which image,
+// what is wrong with it) could never have been a fixed enum anyway.
+const REJECT_REASON_MAX = 500;
+
+function cleanRejectReason(reason) {
+  // Control characters out: this string is rendered on someone's router.
+  // Both renderers set textContent rather than markup, so nothing here is an
+  // escaping concern -- this is about a stray newline or NUL from a paste.
+  // eslint-disable-next-line no-control-regex
+  return reason.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, REJECT_REASON_MAX);
+}
+
 async function rejectConfig(request, env, id) {
   const actor = requireAdmin(request, env);
+  // Same optional-reason shape takedown and ban use, so the console has one
+  // way to say why it did something. Unlike theirs, this one does not stop
+  // at the audit log.
+  const reason = cleanRejectReason(await readOptionalReason(request));
 
   const config = await env.DB.prepare(
     "SELECT id FROM configs WHERE id = ? AND status = 'active' AND assets_status = 'pending'"
@@ -366,11 +397,18 @@ async function rejectConfig(request, env, id) {
   const remaining = await env.DB.prepare("SELECT COUNT(*) AS n FROM assets WHERE config_id = ?").bind(id).first();
   const newStatus = remaining.n > 0 ? "approved" : "rejected";
 
-  await env.DB.prepare("UPDATE configs SET assets_status = ?, updated_at = datetime('now') WHERE id = ?")
-    .bind(newStatus, id)
+  // Only a config that ends up wholly rejected carries the reason: one that
+  // still has approved assets is back to a normal listing, and an
+  // explanation for kinds that no longer exist would only confuse.
+  const storedReason = newStatus === "rejected" && reason ? reason : null;
+  await env.DB.prepare(
+    `UPDATE configs SET assets_status = ?, assets_reject_reason = ?, updated_at = datetime('now')
+      WHERE id = ?`
+  )
+    .bind(newStatus, storedReason, id)
     .run();
 
-  await logAction(env, actor, "reject", "config", id);
+  await logAction(env, actor, "reject", "config", id, reason);
 
   return jsonResponse({ id, rejected: true });
 }

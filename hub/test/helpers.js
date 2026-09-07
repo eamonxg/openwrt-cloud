@@ -7,6 +7,16 @@ import { sha256Hex } from "../src/ids.js";
 export const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
+// A 1x1 JPEG: SOI, an SOF0 frame header carrying the dimensions, EOI. It has
+// no scan data, so nothing will decode it — but the ingest gates read the
+// frame header, and a fixture that is only magic bytes has no header to read.
+export const JPEG_1X1_BASE64 = "/9j/wAARCAABAAEDAREAAhEBAxEB/9k=";
+
+// A 1x1 lossless WebP: RIFF/WEBP wrapper around a single VP8L chunk whose
+// header carries the dimensions. Like the JPEG above, it exists to be read,
+// not decoded.
+export const WEBP_1X1_BASE64 = "UklGRhIAAABXRUJQVlA4TAUAAAAvAAAAAAA=";
+
 export function makeToken() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");

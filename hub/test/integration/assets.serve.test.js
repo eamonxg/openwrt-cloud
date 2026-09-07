@@ -1,18 +1,15 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { makeAsset, makePayload, makeToken, PNG_1X1_BASE64 } from "../helpers.js";
+import { makeAsset, makePayload, makeToken, PNG_1X1_BASE64, JPEG_1X1_BASE64 } from "../helpers.js";
 
 const SHARE_URL = "https://example.com/api/v1/themes/aurora/configs";
 
-// Minimal bytes that pass the JPEG magic-byte sniff (FF D8 FF ...) — the
-// remaining bytes are arbitrary filler, since isJpeg only checks the prefix.
-const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
 function bytesToBase64(bytes) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
 }
-const JPEG_BASE64 = bytesToBase64(JPEG_BYTES);
+const JPEG_BASE64 = JPEG_1X1_BASE64;
 
 const SVG_TEXT = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
 const SVG_BASE64 = btoa(SVG_TEXT);

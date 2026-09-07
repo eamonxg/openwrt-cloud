@@ -3,7 +3,7 @@
 //
 // R2 objects live under one of two states while a config's assets_status
 // walks pending -> approved (or rejected): `pending/{id}/{kind}` for
-// unreviewed bytes, `approved/{id}/{kind}` once an admin has re-encoded and
+// unreviewed bytes, `approved/{id}/{kind}` once an admin has reviewed and
 // approved them (Task 6/9 write the "approved" side; this file only needs to
 // know the key shape).
 
@@ -22,6 +22,8 @@ const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47];
 const ICO_MAGIC = [0x00, 0x00, 0x01, 0x00];
 const JPEG_MAGIC = [0xff, 0xd8, 0xff];
 const WOFF2_MAGIC = [0x77, 0x4f, 0x46, 0x32]; // ascii "wOF2"
+const RIFF_MAGIC = [0x52, 0x49, 0x46, 0x46]; // ascii "RIFF"
+const WEBP_MAGIC = [0x57, 0x45, 0x42, 0x50]; // ascii "WEBP", at offset 8
 
 function isPng(bytes) {
   return startsWithBytes(bytes, PNG_MAGIC);
@@ -39,7 +41,18 @@ function isWoff2(bytes) {
   return startsWithBytes(bytes, WOFF2_MAGIC);
 }
 
-function isSvg(bytes) {
+// WebP is a RIFF container, so the format is named eight bytes in rather than
+// at the front.
+function isWebp(bytes) {
+  if (bytes.length < 12) return false;
+  if (!startsWithBytes(bytes, RIFF_MAGIC)) return false;
+  for (let i = 0; i < 4; i++) {
+    if (bytes[8 + i] !== WEBP_MAGIC[i]) return false;
+  }
+  return true;
+}
+
+export function isSvg(bytes) {
   let text;
   try {
     // TextDecoder strips a leading UTF-8 BOM by default (ignoreBOM: false),
@@ -52,27 +65,128 @@ function isSvg(bytes) {
   return text.startsWith("<svg") || text.startsWith("<?xml");
 }
 
-// login_bg / main_bg accept either PNG or JPEG bytes; callers that need to
-// know which one matched (to record it for Content-Type on download) should
-// use `sniffBgFormat` directly instead of the boolean-only MAGIC_CHECKS
-// entry.
+// Pixel dimensions read straight out of the header -- no decode, so a PNG
+// that expands to 20000x20000 is turned away before anything allocates its
+// pixels. Returns null when the header cannot be read, which callers
+// treat as a rejection: every real PNG/JPEG carries these fields, so a file
+// that will not give them up is not one to hand a browser.
+function pngDimensions(view, bytes) {
+  if (bytes.length < 24) return null;
+  if (view.getUint32(12) !== 0x49484452) return null; // "IHDR", always first
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
+// Every SOFn frame header carries the size, except the four markers in that
+// numeric range that are not frame headers at all (DHT, JPG, DAC, and the
+// restart markers).
+const JPEG_SOF_MARKERS = new Set([
+  0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7,
+  0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf,
+]);
+
+function jpegDimensions(view, bytes) {
+  let offset = 2; // past SOI
+  while (offset + 9 < bytes.length) {
+    if (bytes[offset] !== 0xff) return null; // lost marker sync
+    const marker = bytes[offset + 1];
+    if (marker === 0xff) {
+      offset += 1; // fill byte
+      continue;
+    }
+    if (marker >= 0xd0 && marker <= 0xd9) {
+      offset += 2; // standalone marker, no length field
+      continue;
+    }
+    const length = view.getUint16(offset + 2);
+    if (length < 2) return null;
+    if (JPEG_SOF_MARKERS.has(marker)) {
+      return { height: view.getUint16(offset + 5), width: view.getUint16(offset + 7) };
+    }
+    if (marker === 0xda) return null; // start of scan, no frame header seen
+    offset += 2 + length;
+  }
+  return null;
+}
+
+// WebP keeps its size in whichever of three bitstream chunks it uses: a lossy
+// VP8 frame header, a lossless VP8L header, or the VP8X extended header that
+// fronts an animation or an alpha channel. All three are fixed-offset reads
+// once the chunk is found.
+function webpDimensions(view, bytes) {
+  if (bytes.length < 16) return null;
+  const fourcc = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+  const payload = 20; // 12 RIFF/WEBP header + 4 fourcc + 4 chunk size
+
+  // Each variant is bounded by what it actually reads rather than by one
+  // blanket floor: a lossless header ends nine bytes before a lossy one, and
+  // a small file has no obligation to carry the difference.
+  if (fourcc === "VP8 ") {
+    if (bytes.length < payload + 10) return null;
+    // Key frames start with a 3-byte tag then this sync code; an interframe
+    // has no size of its own and cannot be the first chunk of a still image.
+    if (bytes[payload + 3] !== 0x9d || bytes[payload + 4] !== 0x01 || bytes[payload + 5] !== 0x2a) {
+      return null;
+    }
+    return {
+      width: view.getUint16(payload + 6, true) & 0x3fff,
+      height: view.getUint16(payload + 8, true) & 0x3fff,
+    };
+  }
+
+  if (fourcc === "VP8L") {
+    if (bytes.length < payload + 5) return null;
+    if (bytes[payload] !== 0x2f) return null;
+    // 14 bits of width-1 then 14 bits of height-1, packed little-endian.
+    const bits = view.getUint32(payload + 1, true);
+    return {
+      width: (bits & 0x3fff) + 1,
+      height: ((bits >>> 14) & 0x3fff) + 1,
+    };
+  }
+
+  if (fourcc === "VP8X") {
+    if (bytes.length < payload + 10) return null;
+    const canvas = payload + 4; // past the feature flags
+    const read24 = (at) => bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16);
+    return { width: read24(canvas) + 1, height: read24(canvas + 3) + 1 };
+  }
+
+  return null;
+}
+
+export function imageDimensions(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (isPng(bytes)) return pngDimensions(view, bytes);
+  if (isJpeg(bytes)) return jpegDimensions(view, bytes);
+  if (isWebp(bytes)) return webpDimensions(view, bytes);
+  return null;
+}
+
+// login_bg / main_bg accept PNG, JPEG or WebP bytes; callers that need to know
+// which one matched (to record it for Content-Type on download) should use
+// `sniffBgFormat` directly instead of the boolean-only MAGIC_CHECKS entry.
+//
+// WebP earns its place on a wallpaper slot: the same byte budget buys visibly
+// more picture than JPEG, which is the whole shape of the problem here -- a
+// full-bleed photo is the one asset that ever presses against the limit.
 export function sniffBgFormat(bytes) {
   if (isPng(bytes)) return "png";
   if (isJpeg(bytes)) return "jpeg";
+  if (isWebp(bytes)) return "webp";
   return null;
 }
 
 // The two full-page background kinds share one pipeline end to end: same
-// magic sniff, same format tracking, same review-console re-encode.
+// magic sniff, same format tracking, same dimension cap.
 export function isBgKind(kind) {
   return kind === "login_bg" || kind === "main_bg";
 }
 
 // A toolbar shortcut icon is whichever of SVG/PNG its author uploaded, so it
 // is format-tracked the same way the bg kinds are. Those two are the only formats
-// on offer because they are the only two the review console can sanitize
-// (sanitizeSvg and the canvas re-encode) — an icon in any other format could
-// be shared but never approved.
+// on offer because they are the only two the review console can render for
+// a reviewer to look at — an icon in any other format could be shared but
+// never approved.
 export function sniffToolbarIconFormat(bytes) {
   if (isPng(bytes)) return "png";
   if (isSvg(bytes)) return "svg";
@@ -117,23 +231,86 @@ export function sniffFormat(kind, bytes) {
   return undefined;
 }
 
-// Kinds whose approved bytes are byte-for-byte the pending bytes, so the
-// admin console has no reason to download them, base64 them, and post them
-// straight back: approve reads these from pending/ in the Worker instead.
+// The whole rewrite rule, in one predicate: SVG is sanitized, every other
+// format is stored byte-for-byte as the sharer uploaded it.
 //
-// This is what keeps the approve body inside ADMIN_APPROVE_BODY_BYTES. With
-// fonts in the body, one config's assets can reach 6*2 MiB + 2*8 MiB = 28 MiB,
-// ~37 MB base64 — over the 25 MB cap, i.e. a config that can be shared but
-// never approved.
+// SVG is the exception because it is a document, not a picture -- it can
+// carry script, external references and CSS, none of which survive
+// sanitizeSvg. A raster image cannot carry any of that, and the two tricks it
+// could carry are already dead on arrival: a polyglot cannot be re-read as
+// HTML because /assets/ pins the Content-Type from the sniffed format and
+// sends nosniff, and a decompression bomb is turned away at upload by the
+// dimension check above. What re-encoding a raster bought on top of that was
+// metadata stripping -- paid for by degrading the image, which is not a
+// trade this store makes: the bytes a sharer uploads are the bytes their
+// theme gets.
 //
-// favicon_ico is deliberately NOT here even though it is also passed through
-// today: at 2 MiB it is no part of the size problem, and its passthrough is
-// forced (canvas cannot emit ICO) rather than intended, so it is the kind
-// most likely to grow a real sanitizer later. Anything added here must be
-// bytes the console genuinely never rewrites -- the console declares its own
-// view per asset and approve rejects any disagreement, so this list and the
-// console's cannot drift apart in silence.
-export const APPROVE_FROM_R2_KINDS = new Set(["font_sans", "font_mono"]);
+// It also removes a whole failure class. The re-encoder was a second, harsher
+// size gate downstream of the upload gate, so bytes could pass the one the
+// sharer was told about and then die at review, unapprovable, with nobody
+// able to do anything about it. Now there is one gate, at upload, and what
+// clears it is what ships.
+//
+// Passthrough is decided from the stored bytes rather than from a static list
+// of kinds because a toolbar icon is SVG or PNG depending on its author. The
+// console declares which form it used per asset and approve rejects any
+// disagreement, so the two sides cannot drift apart in silence.
+export function approveRewritesBytes(bytes) {
+  return isSvg(bytes);
+}
+
+// Full-page backgrounds legitimately arrive as 4K/5K wallpapers; an icon that
+// large is a mistake or a bomb. Neither cap costs the sharer any quality --
+// it is a "this image is the wrong shape for the slot" rejection, made at
+// upload where it can still be acted on.
+const MAX_BG_EDGE = 8192;
+const MAX_ICON_EDGE = 4096;
+
+export function maxImageEdge(kind) {
+  return isBgKind(kind) ? MAX_BG_EDGE : MAX_ICON_EDGE;
+}
+
+// Kinds whose bytes are raster images, and so carry pixel dimensions worth
+// capping. favicon_ico is left out: ICO is a container of several sizes with
+// no single frame to measure, and its byte cap already bounds it.
+export function isRasterImageKind(kind) {
+  return (
+    isBgKind(kind) ||
+    kind === "favicon_png" ||
+    kind === "pwa_icon_192" ||
+    kind === "pwa_icon_512" ||
+    isToolbarIconKind(kind)
+  );
+}
+
+// Called by both ingest paths -- the one-shot base64 share/PUT (configs.js)
+// and the chunked draft upload (drafts.js) -- so a route cannot be the one
+// that forgets. Runs on the magic-checked bytes, off the header alone: a
+// small PNG can still expand to 20000x20000, and since nothing re-encodes
+// these bytes any more, this is the only thing standing between such a file
+// and every browser that later renders it. Throwing here rather than at
+// review is the point: the sharer is still in front of the picker and can
+// pick a different image.
+//
+// A toolbar icon that sniffed as SVG has no raster header and is skipped --
+// sanitizeSvg is what bounds that one.
+export function assertImageWithinLimits(kind, bytes) {
+  if (!isRasterImageKind(kind)) return;
+  if (isToolbarIconKind(kind) && isSvg(bytes)) return;
+
+  const dims = imageDimensions(bytes);
+  if (!dims) {
+    throw new HttpError(400, "bad_asset", `Asset ${kind} has an unreadable image header.`);
+  }
+  const edge = maxImageEdge(kind);
+  if (dims.width > edge || dims.height > edge) {
+    throw new HttpError(
+      413,
+      "asset_too_large",
+      `Asset ${kind} is ${dims.width}x${dims.height}, over the ${edge}x${edge} limit.`
+    );
+  }
+}
 
 export const MAGIC_CHECKS = {
   logo_svg: isSvg,
@@ -167,17 +344,15 @@ const STATIC_CONTENT_TYPES = {
 // from the format recorded in R2 customMetadata at write time — pass that
 // string in as `format`. Every other kind pins its own and ignores it.
 //
-// The fallbacks cover objects whose customMetadata went missing: the review
-// console re-encodes the bg kinds to JPEG (stepping quality until they fit
-// the 2 MiB cap) and leaves a toolbar icon in whichever of its two formats it
-// arrived as (an SVG through sanitizeSvg, a PNG through the canvas). A
-// missing-metadata bg object still reads as PNG — legacy objects predate the
-// JPEG re-encode — and a toolbar icon reads as PNG, never SVG: guessing "svg"
-// for a raster byte stream would hand a browser a mislabelled image, while
-// the reverse merely renders nothing.
+// The fallbacks cover objects whose customMetadata went missing. A bg reads
+// as PNG and a toolbar icon reads as PNG, never SVG: guessing "svg" for a
+// raster byte stream would hand a browser a mislabelled image, while the
+// reverse merely renders nothing.
+const BG_CONTENT_TYPES = { jpeg: "image/jpeg", webp: "image/webp", png: "image/png" };
+
 export function contentTypeFor(kind, format) {
   if (isBgKind(kind)) {
-    return format === "jpeg" ? "image/jpeg" : "image/png";
+    return BG_CONTENT_TYPES[format] || "image/png";
   }
   if (isToolbarIconKind(kind)) {
     return format === "svg" ? "image/svg+xml" : "image/png";

@@ -5,7 +5,13 @@
 import { HttpError, deviceFromToken, bumpQuota } from "./auth.js";
 import { shortId, canonicalJson, contentHash, sha256Hex } from "./ids.js";
 import { validateMeta, validatePayload, cleanText } from "./validate.js";
-import { MAGIC_CHECKS, r2Key, isFormatTrackedKind, sniffFormat } from "./assets.js";
+import {
+  MAGIC_CHECKS,
+  r2Key,
+  isFormatTrackedKind,
+  sniffFormat,
+  assertImageWithinLimits,
+} from "./assets.js";
 import { jsonResponse, errorResponse, readJsonBounded, MAX_BODY_BYTES } from "./http.js";
 import { softTakedown, purgeConfig } from "./lifecycle.js";
 
@@ -95,6 +101,8 @@ async function reconcileAssets(manifest, bodyAssets) {
     if (!check(bytes)) {
       throw new HttpError(400, "bad_asset", `Asset ${item.kind} failed the magic-byte check.`);
     }
+
+    assertImageWithinLimits(item.kind, bytes);
 
     const format = sniffFormat(item.kind, bytes);
     resolved.push({ kind: item.kind, bytes, format });
@@ -655,7 +663,8 @@ export async function updateConfigWithAssets(env, { theme, row, meta, payload, s
     env.DB.prepare(
       `UPDATE configs
          SET name = ?, description = ?, payload = ?, content_hash = ?,
-             version = ?, assets_status = ?, updated_at = datetime('now')
+             version = ?, assets_status = ?, assets_reject_reason = NULL,
+             updated_at = datetime('now')
        WHERE id = ?`
     ).bind(meta.name, meta.description, canonicalPayload, hash, newVersion, assetsStatus, id)
   );

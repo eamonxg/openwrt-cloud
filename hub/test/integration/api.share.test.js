@@ -277,4 +277,44 @@ describe("POST /api/v1/themes/:theme/configs", () => {
     const detail = await (await SELF.fetch(`${SHARE_URL}/${id}`)).json();
     expect(detail.author).toBe("");
   });
+
+  // The two ingest paths -- this one-shot base64 share and the chunked draft
+  // upload -- have to agree on what they will take, or the stricter one is
+  // just a detour around the other.
+  describe("what the store will and will not take", () => {
+    const PNG_12000X9000 = "iVBORw0KGgoAAAANSUhEUgAALuAAACMoCAAAAADoQi40AAAAAElFTkSuQmCC";
+
+    it("413 asset_too_large from the manifest alone, naming the slot, the size and the limit", async () => {
+      // Decided before a single byte moves: the manifest says how big the
+      // image is, so the sharer hears about it while they can still swap it.
+      const res = await shareRequest({
+        device_token: makeToken(),
+        name: "Too Big",
+        payload: makePayload({
+          colors: { light_bg: "#310001" },
+          assets: [{ kind: "main_bg", sha256: "a".repeat(64), size: 12 * 1024 * 1024 }],
+        }),
+      });
+
+      expect(res.status).toBe(413);
+      const body = await res.json();
+      expect(body.error.code).toBe("asset_too_large");
+      expect(body.error.message).toMatch(/main_bg is 12582912 bytes.*8388608 byte limit/);
+    });
+
+    it("413 asset_too_large for pixel dimensions on the inline path too", async () => {
+      const asset = await makeAsset("main_bg", PNG_12000X9000);
+      const res = await shareRequest({
+        device_token: makeToken(),
+        name: "Too Many Pixels",
+        payload: makePayload({ colors: { light_bg: "#310002" }, assets: [asset.manifest] }),
+        assets: [asset.body],
+      });
+
+      expect(res.status).toBe(413);
+      const body = await res.json();
+      expect(body.error.code).toBe("asset_too_large");
+      expect(body.error.message).toMatch(/12000x9000.*8192x8192/);
+    });
+  });
 });
