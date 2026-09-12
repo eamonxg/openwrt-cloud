@@ -1,11 +1,3 @@
-/releases/opkg/*
-  Content-Type: application/octet-stream
-  Cache-Control: public, max-age=600, no-transform
-
-/releases/apk/*
-  Content-Type: application/octet-stream
-  Cache-Control: public, max-age=600, no-transform
-
 /snapshots/opkg/*
   Content-Type: application/octet-stream
   Cache-Control: public, max-age=600, no-transform

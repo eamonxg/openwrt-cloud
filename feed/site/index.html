@@ -658,13 +658,13 @@ html:not([data-dappled]) .dapple g { animation-play-state: paused !important; }
       <tr>
         <td class="k"><span class="en">Arch</span><span class="zh">架构</span></td>
         <td class="st"><i></i><span class="en">universal</span><span class="zh">通用</span></td>
-        <td class="val"><span class="en">all · one build, every device</span><span class="zh">架构名 all · 一份产物通用所有设备</span></td>
+        <td class="val"><span class="en">universal packages for every device · arch-specific ones in per-arch directories</span><span class="zh">通用包全设备可用 · 架构专属包按架构目录分发</span></td>
         <td class="more">···</td>
       </tr>
       <tr>
         <td class="k"><span class="en">Channels</span><span class="zh">通道</span></td>
-        <td class="st"><i></i><span class="en">2 active</span><span class="zh">2 条</span></td>
-        <td class="val"><span class="en">snapshots · releases</span><span class="zh">快照 snapshots · 发布 releases</span></td>
+        <td class="st"><i></i><span class="en">1 active</span><span class="zh">1 条</span></td>
+        <td class="val"><span class="en">snapshots · built daily from each repo’s HEAD</span><span class="zh">snapshots · 各仓库 HEAD 每日构建</span></td>
         <td class="more">···</td>
       </tr>
     </table>
@@ -694,41 +694,30 @@ html:not([data-dappled]) .dapple g { animation-play-state: paused !important; }
     </p>
 
     <h3><span class="stamp rec"><span class="en">Snapshot</span><span class="zh">快照版</span></span>
-      <span class="en">daily builds from the main branch (default channel)</span>
-      <span class="zh">主分支每日构建（默认通道）</span></h3>
+      <span class="en">built daily from each repo’s main branch; the script picks the directory for your device’s architecture</span>
+      <span class="zh">各仓库主分支每日构建；脚本按设备架构选择对应目录</span></h3>
     <div class="cmd"><button class="copy" type="button">copy</button><pre><code><span class="p">$</span> wget -qO- https://__FEED_HOST__/install.sh | sh</code></pre></div>
 
-    <h3><span class="stamp alt"><span class="en">Releases</span><span class="zh">发布版</span></span>
-      <span class="en">latest tagged releases, updates only when a release is cut</span>
-      <span class="zh">各包最新发布 tag，仅发版时更新</span></h3>
-    <div class="cmd"><button class="copy" type="button">copy</button><pre><code><span class="p">$</span> wget -qO- https://__FEED_HOST__/install.sh | CHANNEL=releases sh</code></pre></div>
 
-    <p class="hint ann-room">
-      <span class="en">Of the two commands above, run just one. Releases are built from each repo’s
-        <span class="ann ann-nw ann-purple" data-note="tags promise tags, not fewer bugs"
-              data-note-en="tags promise tags, not fewer bugs"
-              data-note-zh="只担保有 tag，不担保没 bug">v* tags</span>, snapshots are built daily — take snapshots.</span>
-      <span class="zh">上面两条命令二选一，发布版按各仓库的 <span class="ann ann-nw ann-purple" data-note="只担保有 tag，不担保没 bug"
-              data-note-en="tags promise tags, not fewer bugs"
-              data-note-zh="只担保有 tag，不担保没 bug">v* 版本 tag</span> 构建，快照版每日构建，推荐使用快照版。</span>
+    <p class="hint">
+      <span class="en">The releases channel has been merged into snapshots. A router set up with a releases URL only needs the install command run again.</span>
+      <span class="zh">releases 频道已并入 snapshots。配置过 releases 源的设备重新执行安装命令即可。</span>
     </p>
   </section>
 
   <section id="manual">
     <h2><span class="no">02</span><span class="en">Manual setup</span><span class="zh">手动安装</span></h2>
     <p>
-      <span class="en">Three steps: import the signing key → add <strong>one</strong> of the two feeds → update the package index.</span>
-      <span class="zh">三步：导入公钥 → 添加源（快照 / 发布<strong>二选一</strong>）→ 更新索引。</span>
+      <span class="en">Three steps: import the signing key → add the feed → update the package index. The universal directory shown below works on every device; if this feed builds arch-specific packages for your architecture, use <code>snapshots/&lt;fmt&gt;/&lt;arch&gt;/</code> instead, which also carries every universal package.</span>
+      <span class="zh">三步：导入公钥 → 添加源 → 更新索引。下面的通用目录所有设备可用；若本源为你的架构构建了专属包，改用 <code>snapshots/&lt;fmt&gt;/&lt;arch&gt;/</code>，它同样包含全部通用包。</span>
     </p>
 
     <h3>opkg <span class="stamp dim">OpenWrt ≤ 24.10</span></h3>
     <div class="cmd en"><button class="copy" type="button">copy</button><pre><code><span class="c"># 1. Import the signing key (the file name MUST be the key fingerprint)</span>
 <span class="p">$</span> wget -qO /etc/opkg/keys/__USIGN_FPR__ https://__FEED_HOST__/eamonxg.pub
 
-<span class="c"># 2a. Add the snapshot feed (recommended)</span>
+<span class="c"># 2. Add the feed</span>
 <span class="p">$</span> echo "src/gz eamonxg https://__FEED_HOST__/snapshots/opkg" &gt;&gt; /etc/opkg/customfeeds.conf
-<span class="c"># 2b. Or: add the release feed</span>
-<span class="p">$</span> echo "src/gz eamonxg https://__FEED_HOST__/releases/opkg" &gt;&gt; /etc/opkg/customfeeds.conf
 
 <span class="c"># 3. Update the index, then install any feed package</span>
 <span class="p">$</span> opkg update
@@ -736,10 +725,8 @@ html:not([data-dappled]) .dapple g { animation-play-state: paused !important; }
     <div class="cmd zh"><button class="copy" type="button">copy</button><pre><code><span class="c"># 1. 导入公钥（文件名必须是密钥指纹）</span>
 <span class="p">$</span> wget -qO /etc/opkg/keys/__USIGN_FPR__ https://__FEED_HOST__/eamonxg.pub
 
-<span class="c"># 2a. 添加快照版源（推荐）</span>
+<span class="c"># 2. 添加源</span>
 <span class="p">$</span> echo "src/gz eamonxg https://__FEED_HOST__/snapshots/opkg" &gt;&gt; /etc/opkg/customfeeds.conf
-<span class="c"># 2b. 或：添加发布版源</span>
-<span class="p">$</span> echo "src/gz eamonxg https://__FEED_HOST__/releases/opkg" &gt;&gt; /etc/opkg/customfeeds.conf
 
 <span class="c"># 3. 更新索引后安装任意包</span>
 <span class="p">$</span> opkg update
@@ -749,10 +736,8 @@ html:not([data-dappled]) .dapple g { animation-play-state: paused !important; }
     <div class="cmd en"><button class="copy" type="button">copy</button><pre><code><span class="c"># 1. Import the signing key</span>
 <span class="p">$</span> wget -qO /etc/apk/keys/eamonxg.pem https://__FEED_HOST__/eamonxg.pem
 
-<span class="c"># 2a. Add the snapshot feed (recommended)</span>
+<span class="c"># 2. Add the feed</span>
 <span class="p">$</span> echo "https://__FEED_HOST__/snapshots/apk/packages.adb" &gt;&gt; /etc/apk/repositories.d/customfeeds.list
-<span class="c"># 2b. Or: add the release feed</span>
-<span class="p">$</span> echo "https://__FEED_HOST__/releases/apk/packages.adb" &gt;&gt; /etc/apk/repositories.d/customfeeds.list
 
 <span class="c"># 3. Update the index, then install any feed package</span>
 <span class="p">$</span> apk update
@@ -760,10 +745,8 @@ html:not([data-dappled]) .dapple g { animation-play-state: paused !important; }
     <div class="cmd zh"><button class="copy" type="button">copy</button><pre><code><span class="c"># 1. 导入公钥</span>
 <span class="p">$</span> wget -qO /etc/apk/keys/eamonxg.pem https://__FEED_HOST__/eamonxg.pem
 
-<span class="c"># 2a. 添加快照版源（推荐）</span>
+<span class="c"># 2. 添加源</span>
 <span class="p">$</span> echo "https://__FEED_HOST__/snapshots/apk/packages.adb" &gt;&gt; /etc/apk/repositories.d/customfeeds.list
-<span class="c"># 2b. 或：添加发布版源</span>
-<span class="p">$</span> echo "https://__FEED_HOST__/releases/apk/packages.adb" &gt;&gt; /etc/apk/repositories.d/customfeeds.list
 
 <span class="c"># 3. 更新索引后安装任意包</span>
 <span class="p">$</span> apk update
@@ -838,9 +821,9 @@ html:not([data-dappled]) .dapple g { animation-play-state: paused !important; }
 const STR = {
   en: {
     channels: {
-      snapshots: { label: 'Snapshot', cls: 'rec', desc: 'main branch HEAD, built daily (default channel)' },
-      releases:  { label: 'Releases', cls: 'alt', desc: 'last 2 tagged releases of each package — keeping 2 means release-moment installs never 404' },
+      snapshots: { label: 'Snapshot', cls: 'rec', desc: 'main branch HEAD, built daily' },
     },
+    archTitle: a => `Arch-specific · ${a}`, archDesc: 'only in this architecture directory; universal packages above are included there too',
     fmt: { opkg: 'opkg (.ipk)', apk: 'apk (.apk)' },
     th: ['Package', 'Version', 'Size', ''],
     dl: 'download', i18nGroup: n => `Language packs luci-i18n-* (${n})`,
@@ -853,9 +836,9 @@ const STR = {
   },
   zh: {
     channels: {
-      snapshots: { label: '快照版', cls: 'rec', desc: '主分支 HEAD，每日构建（默认通道）' },
-      releases:  { label: '发布版', cls: 'alt', desc: '各包最近 2 个发布 tag——保留 2 个，发版瞬间安装不 404' },
+      snapshots: { label: '快照版', cls: 'rec', desc: '主分支 HEAD，每日构建' },
     },
+    archTitle: a => `架构专属 · ${a}`, archDesc: '仅在该架构目录提供；上方的通用包在该目录同样包含',
     fmt: { opkg: 'opkg（.ipk）', apk: 'apk（.apk）' },
     th: ['包', '版本', '大小', ''],
     dl: '下载', i18nGroup: n => `语言包 luci-i18n-*（${n} 个）`,
@@ -934,6 +917,19 @@ function renderTables() {
         d.append(sm, renderTable(i18n, channel, fmt, s));
         root.append(d);
       }
+    }
+  }
+  const universal = new Set(Object.values(manifest.channels.snapshots || {}).flat().map(it => it.pkg));
+  for (const [arch, fmts] of Object.entries(manifest.arches || {})) {
+    const extras = Object.entries(fmts).map(([fmt, items]) => [fmt, items.filter(it => !universal.has(it.pkg))]).filter(([, items]) => items.length);
+    if (!extras.length) continue;
+    const h = document.createElement('h3');
+    h.innerHTML = `<span class="stamp alt">${s.archTitle(arch)}</span><span class="hint">${s.archDesc}</span>`;
+    root.append(h);
+    for (const [fmt, items] of extras) {
+      const sub = document.createElement('p');
+      sub.className = 'hint'; sub.textContent = s.fmt[fmt] || fmt;
+      root.append(sub, renderTable(items, `snapshots`, `${fmt}/${arch}`, s));
     }
   }
 }

@@ -7,11 +7,14 @@ fail=0
 
 # Render install.sh the way the site build does, so tests exercise the shipped
 # file rather than the placeholder template.
-render() {
+render() { # [arches] [extra packages for aarch64_cortex-a53]
+  printf 'arch_extra() { case "$1" in aarch64_cortex-a53) echo "%s" ;; *) echo "" ;; esac; }\n' "${2:-}" > "$tmp/fn.sh"
   sed -e 's/__FEED_HOST__/feed.example.test/g' \
       -e 's/__USIGN_FPR__/0b26f36ae0f4106d/g' \
       -e 's/__PACKAGES__/luci-theme-aurora luci-theme-shadcn luci-app-aurora-config/g' \
-      "$REPO/site/install.sh" > "$tmp/install.sh"
+      -e "s/__ARCHES__/${1:-}/g" \
+      "$REPO/site/install.sh" \
+    | awk -v f="$tmp/fn.sh" '$0=="__ARCH_PACKAGES__" { while ((getline line < f) > 0) print line; close(f); next } { print }' > "$tmp/install.sh"
   chmod +x "$tmp/install.sh"
 }
 
@@ -21,6 +24,7 @@ setup_sandbox() {
   mkdir -p "$tmp/root/etc" "$tmp/root/lib/apk/db" "$tmp/root/usr/lib/opkg"
   if [ "$1" = apk ]; then touch "$tmp/root/lib/apk/db/installed"
   else touch "$tmp/root/usr/lib/opkg/status"; fi
+  cp "$REPO/tests/fixtures/openwrt_release" "$tmp/root/etc/openwrt_release"
   : > "$tmp/log"
 }
 
@@ -306,5 +310,42 @@ run_install $'1\ny\nn\n' \
 order=$(grep -E '^opkg (install|upgrade) ' "$tmp/log" | tr '\n' '|')
 [ "$order" = "opkg install luci-theme-aurora|opkg upgrade luci-theme-shadcn|" ] \
   || { echo "FAIL: run order does not match list order: $order"; fail=1; }
+
+
+# --- v2: the arch directory is used when the feed builds for this arch --------
+render "aarch64_cortex-a53 x86_64" "hello-arch"
+setup_sandbox apk
+run_install "" FAKE_AVAIL="luci-theme-aurora=1.1.0 hello-arch=1.0"
+[ "$rc" = 0 ] || { echo "FAIL: arch run rc=$rc"; echo "$out"; fail=1; }
+grep -q 'https://feed.example.test/snapshots/apk/aarch64_cortex-a53/packages.adb' "$tmp/root/etc/apk/repositories.d/customfeeds.list" \
+  || { echo "FAIL: arch feed line expected"; cat "$tmp/root/etc/apk/repositories.d/customfeeds.list"; fail=1; }
+assert_out "hello-arch"
+setup_sandbox opkg
+run_install "" FAKE_AVAIL="luci-theme-aurora=1.1.0"
+grep -q 'src/gz eamonxg https://feed.example.test/snapshots/opkg/aarch64_cortex-a53$' "$tmp/root/etc/opkg/customfeeds.conf" \
+  || { echo "FAIL: opkg arch feed line expected"; cat "$tmp/root/etc/opkg/customfeeds.conf"; fail=1; }
+
+# --- v2: an arch the feed does not build for falls back to universal, loudly --
+render "x86_64" ""
+setup_sandbox apk
+run_install "" FAKE_AVAIL="luci-theme-aurora=1.1.0"
+[ "$rc" = 0 ] || { echo "FAIL: fallback rc=$rc"; echo "$out"; fail=1; }
+grep -q 'https://feed.example.test/snapshots/apk/packages.adb' "$tmp/root/etc/apk/repositories.d/customfeeds.list" \
+  || { echo "FAIL: universal feed line expected"; fail=1; }
+assert_out "no aarch64_cortex-a53-specific packages"
+
+# --- v2: re-running drops an old releases line and never duplicates ---------
+setup_sandbox apk
+mkdir -p "$tmp/root/etc/apk/repositories.d"
+printf 'https://feed.example.test/releases/apk/packages.adb\n' > "$tmp/root/etc/apk/repositories.d/customfeeds.list"
+run_install "" FAKE_AVAIL="luci-theme-aurora=1.1.0"
+grep -q '/releases/' "$tmp/root/etc/apk/repositories.d/customfeeds.list" && { echo "FAIL: releases line must be dropped"; fail=1; }
+[ "$(grep -c feed.example.test "$tmp/root/etc/apk/repositories.d/customfeeds.list")" = 1 ] || { echo "FAIL: exactly one feed line"; fail=1; }
+
+# --- v2: CHANNEL is refused with a pointer to the change -------------------
+setup_sandbox apk
+run_install "" CHANNEL=releases
+[ "$rc" != 0 ] || { echo "FAIL: CHANNEL=releases must fail"; fail=1; }
+assert_out "releases"
 
 exit "$fail"

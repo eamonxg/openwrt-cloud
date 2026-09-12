@@ -1,19 +1,18 @@
 #!/bin/sh
 # eamonxg OpenWrt feed installer — https://__FEED_HOST__
-# Usage: wget -qO- https://__FEED_HOST__/install.sh | sh                   (snapshots, default)
-#        wget -qO- https://__FEED_HOST__/install.sh | CHANNEL=releases sh  (stable releases)
+# Usage: wget -qO- https://__FEED_HOST__/install.sh | sh
 #        wget -qO- https://__FEED_HOST__/install.sh | PKGS="luci-theme-aurora" YES=1 sh
 set -e
 HOST="__FEED_HOST__"
 FPR="__USIGN_FPR__"
-CHANNEL="${CHANNEL:-snapshots}"
+ARCHES="__ARCHES__"
 ROOT="${ROOT:-}"
 TTY_DEV="${TTY_DEV-/dev/tty}"
-[ "${1:-}" = "-s" ] && CHANNEL=snapshots
-case "$CHANNEL" in
-  releases|snapshots) ;;
-  *) echo "invalid CHANNEL: $CHANNEL (releases|snapshots)" >&2; exit 1 ;;
-esac
+if [ -n "${CHANNEL:-}" ]; then
+  echo "The releases channel was merged into snapshots; run again without CHANNEL=$CHANNEL." >&2
+  exit 1
+fi
+__ARCH_PACKAGES__
 
 [ "$(id -u)" = 0 ] || { echo "This installer must be run as root." >&2; exit 1; }
 
@@ -32,7 +31,7 @@ else
   exit 1
 fi
 command -v "$PM" >/dev/null 2>&1 || { echo "$PM database found but $PM binary is missing" >&2; exit 1; }
-echo "Package manager: $PM  |  channel: $CHANNEL"
+echo "Package manager: $PM  |  arch: ${ARCH:-unknown}"
 
 # fetch <url> <dest> — OpenWrt's default wget is uclient-fetch, which cannot do
 # TLS without libustream-ssl. Say that, rather than surfacing a bare exit code.
@@ -53,23 +52,38 @@ drop_lines() {
   mv "$1.tmp" "$1"
 }
 
-# Step 2: import the signing key and add the feed
+# Step 2: import the signing key and add the feed. The arch directory carries
+# every package (universal ones included); the universal directory is the
+# fallback for arches this feed does not build for.
+ARCH=""
+[ -f "$ROOT/etc/openwrt_release" ] && ARCH=$(. "$ROOT/etc/openwrt_release" 2>/dev/null; printf '%s' "${DISTRIB_ARCH:-}")
+SUBDIR=""
+case " $ARCHES " in *" $ARCH "*) [ -n "$ARCH" ] && SUBDIR="$ARCH/" ;; esac
+if [ -n "$ARCHES" ] && [ -z "$SUBDIR" ]; then
+  echo "This feed has no ${ARCH:-unknown}-specific packages; only universal packages will be available." >&2
+fi
 if [ "$PM" = apk ]; then
   mkdir -p "$ROOT/etc/apk/keys" "$ROOT/etc/apk/repositories.d"
   fetch "https://$HOST/eamonxg.pem" "$ROOT/etc/apk/keys/eamonxg.pem"
   drop_lines "$ROOT/etc/apk/repositories.d/customfeeds.list" "https://$HOST/"
-  echo "https://$HOST/$CHANNEL/apk/packages.adb" >> "$ROOT/etc/apk/repositories.d/customfeeds.list"
+  echo "https://$HOST/snapshots/apk/${SUBDIR}packages.adb" >> "$ROOT/etc/apk/repositories.d/customfeeds.list"
 else
   mkdir -p "$ROOT/etc/opkg/keys"
   fetch "https://$HOST/eamonxg.pub" "$ROOT/etc/opkg/keys/$FPR"
   drop_lines "$ROOT/etc/opkg/customfeeds.conf" "src/gz eamonxg "
-  echo "src/gz eamonxg https://$HOST/$CHANNEL/opkg" >> "$ROOT/etc/opkg/customfeeds.conf"
+  echo "src/gz eamonxg https://$HOST/snapshots/opkg${SUBDIR:+/${SUBDIR%/}}" >> "$ROOT/etc/opkg/customfeeds.conf"
 fi
 
 # Step 3: refresh the index
 "$PM" update
 
 ALL="__PACKAGES__"
+EXTRA=$(arch_extra "$ARCH")
+if [ -n "$SUBDIR" ]; then
+  [ -z "$EXTRA" ] || ALL="$ALL $EXTRA"
+elif [ -n "$EXTRA" ]; then
+  echo "Not available for ${ARCH:-unknown}: $EXTRA" >&2
+fi
 
 # ---------------------------------------------------------------- probing ---
 # Two kinds of fact, deliberately different in reliability:
@@ -397,7 +411,7 @@ menu() {
 
 print_only() {
   echo ""
-  echo "Feed installed (channel: $CHANNEL). Available packages:"
+  echo "Feed installed (arch: ${ARCH:-unknown}). Available packages:"
   for p in $ALL; do
     av=$(state_field "$p" 3)
     printf '  %-28s %-10s %s\n' "$p" "${av:--}" "$(status_text "$p")"
