@@ -1,9 +1,11 @@
-[
-  { "repo": "eamonxg/luci-theme-aurora", "pkg": "luci-theme-aurora" },
-  { "repo": "eamonxg/luci-theme-shadcn", "pkg": "luci-theme-shadcn" },
-  {
-    "repo": "eamonxg/luci-app-aurora-config",
-    "pkg": "luci-app-aurora-config",
-    "langs": ["zh-cn","zh-tw","de","es","fr","id","it","ja","ko","nl","pl","ru","tr","uk","vi"]
-  }
-]
+{
+  "feed": "eamonxg",
+  "sdk": { "apk": "25.12.5", "opkg": "24.10.4" },
+  "arches": null,
+  "packages": [
+    { "pkg": "luci-theme-aurora",      "repo": "eamonxg/luci-theme-aurora" },
+    { "pkg": "luci-theme-shadcn",      "repo": "eamonxg/luci-theme-shadcn" },
+    { "pkg": "luci-app-aurora-config", "repo": "eamonxg/luci-app-aurora-config",
+      "langs": ["zh-cn","zh-tw","de","es","fr","id","it","ja","ko","nl","pl","ru","tr","uk","vi"] }
+  ]
+}
