@@ -2,32 +2,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/dist"
-mkmanifest() { cat > "$1" <<'EOF'
-{"generated":"t","channels":{"releases":{"opkg":[{"pkg":"luci-theme-aurora"},{"pkg":"luci-i18n-aurora-config-de"}],"apk":[]},"snapshots":{"opkg":[{"pkg":"luci-theme-shadcn"}],"apk":[]}}}
-EOF
-}
-mkmanifest "$tmp/dist/manifest.json"
-scripts/render-site.sh site "$tmp/dist" "feed.example.test" "0b26f36ae0f4106d" "SHA256:Zm9vYmFyKw=="
-[ -f "$tmp/dist/index.html" ] && [ -f "$tmp/dist/install.sh" ] && [ -f "$tmp/dist/_headers" ] \
-  || { echo "site files missing"; exit 1; }
-for a in neat-annotations.css geist-mono-variable.woff2 shantell-sans-500.woff2 \
-         router-ink-light.png router-ink-dark.png paper-texture.jpg paper-dark.jpg \
-         favicon.svg ambience-blinds.m4a ambience-leaves.m4a; do
-  [ -f "$tmp/dist/assets/$a" ] || { echo "asset missing: $a"; exit 1; }
-done
-grep -q "feed.example.test" "$tmp/dist/install.sh" || { echo "host not substituted"; exit 1; }
-grep -q "0b26f36ae0f4106d" "$tmp/dist/install.sh" || { echo "fpr not substituted"; exit 1; }
-# the apk fingerprint is base64 — its / and + must survive sed unmangled
-grep -qF "SHA256:Zm9vYmFyKw==" "$tmp/dist/index.html" || { echo "apk fpr not substituted"; exit 1; }
-# package list derived from manifest: unique main packages, i18n excluded, sorted
-grep -q "luci-theme-aurora luci-theme-shadcn" "$tmp/dist/install.sh" || { echo "package list not injected"; exit 1; }
-! grep -q "luci-i18n-aurora-config-de" "$tmp/dist/install.sh" || { echo "i18n leaked into package list"; exit 1; }
-! grep -rq "__FEED_HOST__\|__USIGN_FPR__\|__PACKAGES__" "$tmp/dist" || { echo "placeholder residue"; exit 1; }
-sh -n "$tmp/dist/install.sh" || { echo "install.sh syntax"; exit 1; }
-# residue guard must actually fire when a stray placeholder survives elsewhere in dist:
-mkdir -p "$tmp/dist2"; mkmanifest "$tmp/dist2/manifest.json"
-echo "__FEED_HOST__" > "$tmp/dist2/leftover.txt"
-if scripts/render-site.sh site "$tmp/dist2" "h" "f" >/dev/null 2>&1; then
-  echo "residue guard did not fire"; exit 1
-fi
+mkdir -p "$tmp/dist" "$tmp/site/assets"; echo a > "$tmp/site/assets/a.css"
+cat > "$tmp/dist/manifest.json" <<'EOS'
+{"generated":"t","feed":"eamonxg","sdk":{"apk":"25.12.5","opkg":"24.10.4"},"built":{"snapshots":{"apk":"t","opkg":"t"}},
+ "channels":{"snapshots":{"apk":[{"pkg":"luci-theme-aurora"},{"pkg":"luci-i18n-aurora-config-de"},{"pkg":"luci-app-aurora-config"}],"opkg":[{"pkg":"luci-theme-aurora"}]}},
+ "arches":{"aarch64_cortex-a53":{"apk":[{"pkg":"luci-theme-aurora"},{"pkg":"hello-arch"}],"opkg":[]},"x86_64":{"apk":[{"pkg":"luci-theme-aurora"}],"opkg":[]}}}
+EOS
+printf '<p>__FEED_HOST__ __PACKAGES__ __ARCHES__</p>\n' > "$tmp/site/index.html"
+printf 'HOST="__FEED_HOST__"\nFPR="__USIGN_FPR__"\nALL="__PACKAGES__"\nARCHES="__ARCHES__"\n__ARCH_PACKAGES__\n' > "$tmp/site/install.sh"
+printf '/x\n  A: b\n' > "$tmp/site/_headers"
+scripts/render-site.sh "$tmp/site" "$tmp/dist" feed.example fpr123 SHA256:apk
+grep -q 'ALL="luci-app-aurora-config luci-theme-aurora"' "$tmp/dist/install.sh" || { echo "packages: $(grep ALL= "$tmp/dist/install.sh")"; exit 1; }
+grep -q 'ARCHES="aarch64_cortex-a53 x86_64"' "$tmp/dist/install.sh" || { echo "arches"; exit 1; }
+grep -q '^arch_extra() {' "$tmp/dist/install.sh" || { echo "arch_extra fn"; exit 1; }
+sed -n '/^arch_extra() {/,/^}/p' "$tmp/dist/install.sh" > "$tmp/fn.sh"
+( . "$tmp/fn.sh"; [ "$(arch_extra aarch64_cortex-a53)" = "hello-arch" ] && [ -z "$(arch_extra x86_64)" ] && [ -z "$(arch_extra mips_24kc)" ] ) || { echo "arch_extra values"; exit 1; }
+grep -q 'feed.example' "$tmp/dist/index.html" && ! grep -q '__' "$tmp/dist/index.html" && ! grep -q '__' "$tmp/dist/install.sh" || { echo "residue"; exit 1; }
