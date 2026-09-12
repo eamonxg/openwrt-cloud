@@ -3,26 +3,17 @@ name: Build and Deploy Feed
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        # Site-only changes (feed/site/index.html, feed/site/assets/**) belong in mode=snapshots, not
-        # full: every deploy re-renders the whole site anyway, while full would rebuild the
-        # releases channel too — and apk packages are not byte-reproducible, so that rewrites
-        # every .apk and devices holding the current index hit checksum mismatches until they
-        # update again. mode=snapshots carries releases forward from the live site verbatim.
-        description: "full = rebuild all channels; snapshots = snapshots only (cron path)"
-        type: choice
-        options: [full, snapshots]
-        default: full
+      dry_run:
+        description: Build and assemble everything, verify locally, but do not deploy
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: [feed/**, .github/workflows/build-and-deploy.yml]
   repository_dispatch:
     types: [package-released]
   schedule:
-    - cron: "25 19 * * *"   # daily 19:25 UTC = 03:25 Asia/Shanghai — snapshots only:
-                            # apk packages are not byte-reproducible (embedded per-package
-                            # signature), so unchanged releases must not be re-deployed
-
-env:
-  SDK_OPKG: "24.10.7"
-  SDK_APK: "25.12.5"
+    - cron: "25 19 * * *"
 
 concurrency:
   group: feed-pipeline
@@ -32,132 +23,160 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     outputs:
-      cells: ${{ steps.m.outputs.cells }}
+      cells: ${{ steps.p.outputs.cells }}
+      tools: ${{ steps.p.outputs.tools }}
+      proceed: ${{ steps.p.outputs.proceed }}
     steps:
-      - id: m
+      - uses: actions/checkout@v6
+      - id: p
         run: |
-          full='[{"channel":"releases","fmt":"opkg","pkg_type":"ipk"},{"channel":"releases","fmt":"apk","pkg_type":"apk"},{"channel":"snapshots","fmt":"opkg","pkg_type":"ipk"},{"channel":"snapshots","fmt":"apk","pkg_type":"apk"}]'
-          snaps='[{"channel":"snapshots","fmt":"opkg","pkg_type":"ipk"},{"channel":"snapshots","fmt":"apk","pkg_type":"apk"}]'
-          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.mode }}" = "snapshots" ]; then
-            echo "cells=$snaps" >> "$GITHUB_OUTPUT"
-          else
-            echo "cells=$full" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          host="${{ vars.FEED_HOST }}"
+          curl -fsS "https://$host/manifest.json" -o live.json || echo '{}' > live.json
+          feed/scripts/plan.sh feed/packages.json live.json > plan.json
+          jq . plan.json
+          echo "cells=$(jq -c '[.cells[] | select(.build|length>0)]' plan.json)" >> "$GITHUB_OUTPUT"
+          echo "tools=$(jq -c '[.sdk | to_entries[] | {fmt:.key, sdk:.value}]' plan.json)" >> "$GITHUB_OUTPUT"
+          any=$(jq -r .any_changed plan.json)
+          if [ "${{ github.event_name }}" = schedule ] && [ "$any" = false ]; then echo "proceed=false"; else echo "proceed=true"; fi >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: plan
+          path: |
+            plan.json
+            live.json
 
-  build:
-    name: ${{ matrix.channel }}-${{ matrix.fmt }}
+  tools:
     runs-on: ubuntu-latest
     needs: plan
+    if: needs.plan.outputs.proceed == 'true'
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.tools) }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: cache
+        uses: actions/cache@v5
+        with:
+          path: tools-${{ matrix.fmt }}
+          key: feed-tools-${{ matrix.fmt }}-${{ matrix.sdk }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: eamonxg/build-luci-package@v2
+        with:
+          sdk: ${{ matrix.sdk }}
+          packages: "[]"
+          out: tools-out
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: mkdir -p tools-${{ matrix.fmt }} && cp tools-out/.tools/* tools-${{ matrix.fmt }}/
+      - uses: actions/upload-artifact@v6
+        with:
+          name: tools-${{ matrix.fmt }}
+          path: tools-${{ matrix.fmt }}
+
+  build:
+    name: ${{ matrix.id }}
+    runs-on: ubuntu-latest
+    needs: plan
+    if: needs.plan.outputs.proceed == 'true' && needs.plan.outputs.cells != '[]'
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.cells) }}
     steps:
       - uses: actions/checkout@v6
-
-      - name: Resolve refs
-        id: refs
-        run: |
-          list=$(feed/scripts/resolve-refs.sh feed/packages.json "${{ matrix.channel }}")
-          echo "resolved: $list"
-          echo "list=$list" >> "$GITHUB_OUTPUT"
-
-      - uses: eamonxg/build-luci-package/feed@master
+      - uses: eamonxg/build-luci-package@v2
         env:
           USIGN_KEY: ${{ secrets.USIGN_PRIVATE_KEY }}
           APK_KEY: ${{ secrets.APK_PRIVATE_KEY }}
         with:
-          pkg_type: ${{ matrix.pkg_type }}
-          sdk_version: ${{ matrix.pkg_type == 'ipk' && env.SDK_OPKG || env.SDK_APK }}
-          build_list: ${{ steps.refs.outputs.list }}
-          out_dir: dist/${{ matrix.channel }}/${{ matrix.fmt }}
-          usign_pub: ${{ matrix.pkg_type == 'ipk' && 'feed/keys/eamonxg.pub' || '' }}
-
+          sdk: ${{ matrix.sdk }}
+          arch: ${{ matrix.arch }}
+          packages: ${{ toJSON(matrix.build) }}
+          out: art/${{ matrix.id }}
+          index_tools: "false"
       - uses: actions/upload-artifact@v6
         with:
-          name: feed-${{ matrix.channel }}-${{ matrix.fmt }}
-          path: dist/
+          name: cell-${{ matrix.id }}
+          path: art/${{ matrix.id }}
 
   deploy:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [plan, tools, build]
+    if: always() && needs.plan.outputs.proceed == 'true' && needs.tools.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
     steps:
       - uses: actions/checkout@v6
-
       - uses: actions/download-artifact@v6
         with:
-          path: dist
-          pattern: feed-*
-          merge-multiple: true
-
-      - name: Carry forward channels not rebuilt this run
+          name: plan
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: cell-*
+          path: art
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: tools-*
+          path: tools
+      - name: Normalise artifact layout
         run: |
           set -euo pipefail
-          host="${{ vars.FEED_HOST }}"
-          : > /tmp/carried.txt
-          for cf in "releases opkg" "releases apk" "snapshots opkg" "snapshots apk"; do
-            set -- $cf; ch=$1; fmt=$2
-            [ -d "dist/$ch/$fmt" ] && continue
-            echo "carrying forward $ch/$fmt from live site (byte-stable, index-consistent)"
-            echo "$ch/$fmt" >> /tmp/carried.txt
-            mkdir -p "dist/$ch/$fmt"
-            curl -fsS "https://$host/manifest.json" -o /tmp/live-manifest.json
-            jq -r --arg c "$ch" --arg f "$fmt" '.channels[$c][$f][].file' /tmp/live-manifest.json \
-              | while read -r file; do
-                  curl -fsS "https://$host/$ch/$fmt/$file" -o "dist/$ch/$fmt/$file"
-                done
-            if [ "$fmt" = opkg ]; then
-              sidecars="Packages Packages.gz Packages.sig Packages.manifest Packages.bom.cdx.json index.json"
-            else
-              sidecars="packages.adb index.json"
-            fi
-            for s in $sidecars; do
-              curl -fsS "https://$host/$ch/$fmt/$s" -o "dist/$ch/$fmt/$s" || echo "warn: no live $ch/$fmt/$s"
-            done
+          mkdir -p art2
+          for d in art/cell-*; do [ -d "$d" ] && mv "$d" "art2/${d#art/cell-}"; done
+          rm -rf art && mv art2 art
+          chmod +x tools/*/*
+      - name: Reuse unchanged files
+        run: feed/scripts/fetch-unchanged.sh plan.json live.json "https://${{ vars.FEED_HOST }}" cache
+      - name: Assemble
+        run: feed/scripts/assemble.sh plan.json art cache live.json dist
+      - name: Index and sign
+        env:
+          USIGN_KEY: ${{ secrets.USIGN_PRIVATE_KEY }}
+          APK_KEY: ${{ secrets.APK_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          jq -c '.cells[]' plan.json | while read -r c; do
+            dir=$(jq -r .dir <<<"$c"); fmt=$(jq -r .fmt <<<"$c"); target=$(jq -r .target <<<"$c")
+            feed/scripts/index-dir.sh "dist/$dir" "$fmt" "$target" "tools/tools-$fmt"
           done
-
-      - name: Assemble site
+      - name: Manifest and site
         run: |
           set -euo pipefail
           cp feed/keys/eamonxg.pub feed/keys/eamonxg.pem dist/
           FPR=$(feed/scripts/usign-fpr.sh feed/keys/eamonxg.pub)
-          APK_FPR="SHA256:$(openssl pkey -pubin -in feed/keys/eamonxg.pem -outform DER \
-            | openssl dgst -sha256 -binary | openssl base64)"
-          feed/scripts/gen-manifest.sh dist /tmp/carried.txt /tmp/live-manifest.json
+          APK_FPR="SHA256:$(openssl pkey -pubin -in feed/keys/eamonxg.pem -outform DER | openssl dgst -sha256 -binary | openssl base64)"
+          feed/scripts/gen-manifest.sh dist "$(jq -r .feed plan.json)" "$(jq -c .sdk plan.json)"
           feed/scripts/render-site.sh feed/site dist "${{ vars.FEED_HOST }}" "$FPR" "$APK_FPR"
           sed "s/__FEED_HOST__/${{ vars.FEED_HOST }}/g" feed/wrangler.template.jsonc > wrangler.jsonc
-          echo "== dist =="; find dist -type f | sort
-
-      - name: Verify manifest against dist (spec §12.6)
+          find dist -type f | sort
+      - name: Verify dist as a device would (local)
+        env:
+          VERIFY_SKIP_HEADERS: "1"
         run: |
           set -euo pipefail
-          jq -r '.channels[] | .[] | .[] | .file' dist/manifest.json | sort > /tmp/manifest-files
-          while read -r f; do
-            found=$(find dist -name "$f" | head -n1)
-            [ -n "$found" ] || { echo "manifest lists missing file: $f"; exit 1; }
-          done < /tmp/manifest-files
-          echo "manifest OK ($(wc -l < /tmp/manifest-files) files)"
-
+          python3 -m http.server -d dist 18080 >/dev/null 2>&1 &
+          sleep 1
+          feed/scripts/verify-feed.sh http://127.0.0.1:18080 apk  snapshots/apk  tools/tools-apk  dist/eamonxg.pem luci-theme-aurora luci-theme-shadcn luci-app-aurora-config
+          feed/scripts/verify-feed.sh http://127.0.0.1:18080 opkg snapshots/opkg tools/tools-opkg dist/eamonxg.pub luci-theme-aurora luci-theme-shadcn luci-app-aurora-config
       - name: Deploy
+        if: ${{ !inputs.dry_run }}
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # wrangler-action's default pin (3.90.0) predates _headers support for
-          # Workers static assets — it uploads _headers as a plain asset
           wranglerVersion: "4.113.0"
           command: deploy --config wrangler.jsonc
-
-      - name: Post-deploy smoke
+      - name: Verify live as a device would
+        if: ${{ !inputs.dry_run }}
         run: |
           set -euo pipefail
           host="${{ vars.FEED_HOST }}"
-          for i in $(seq 1 10); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "https://$host/releases/opkg/Packages.gz" || true)
-            [ "$code" = 200 ] && break
-            echo "attempt $i: HTTP $code — waiting 30s (domain/cert propagation)"; sleep 30
+          for i in $(seq 1 10); do curl -fsS "https://$host/manifest.json" -o /tmp/m && break; sleep 30; done
+          feed/scripts/verify-feed.sh "https://$host" apk  snapshots/apk  tools/tools-apk  dist/eamonxg.pem luci-theme-aurora luci-theme-shadcn luci-app-aurora-config
+          feed/scripts/verify-feed.sh "https://$host" opkg snapshots/opkg tools/tools-opkg dist/eamonxg.pub luci-theme-aurora luci-theme-shadcn luci-app-aurora-config
+          for a in $(jq -r '.arches[]' plan.json); do
+            feed/scripts/verify-feed.sh "https://$host" apk "snapshots/apk/$a" tools/tools-apk dist/eamonxg.pem luci-theme-aurora
           done
-          curl -sI "https://$host/releases/opkg/Packages.gz" | tee /tmp/h
-          grep -qi '^content-type: application/octet-stream' /tmp/h
-          ! grep -qi '^content-encoding:' /tmp/h
-          echo "headers OK"
+      - uses: actions/upload-artifact@v6
+        if: ${{ inputs.dry_run }}
+        with:
+          name: dist
+          path: dist

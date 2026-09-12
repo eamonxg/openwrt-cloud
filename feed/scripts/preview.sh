@@ -12,19 +12,18 @@ host=${PREVIEW_HOST:-openwrt.example}
 dist=$(mktemp -d)
 trap 'rm -rf "$dist"' EXIT
 
-mkdir -p "$dist"/{releases,snapshots}/{opkg,apk}
+mkdir -p "$dist"/snapshots/{opkg,apk}
 if [ -n "${PREVIEW_MANIFEST_URL:-}" ] && curl -fsS --max-time 10 "$PREVIEW_MANIFEST_URL" -o "$dist/manifest.json"; then
   echo "manifest: $PREVIEW_MANIFEST_URL"
 else
   # Enough shape for the page to render its tables without any live feed.
   cat > "$dist/manifest.json" <<'EOF'
-{"generated":"2026-01-01T00:00:00Z",
- "built":{"releases":{"opkg":"2026-01-01T00:00:00Z","apk":"2026-01-01T00:00:00Z"},
-          "snapshots":{"opkg":"2026-01-01T00:00:00Z","apk":"2026-01-01T00:00:00Z"}},
+{"generated":"2026-01-01T00:00:00Z","feed":"eamonxg","sdk":{"apk":"25.12.5","opkg":"24.10.4"},
+ "built":{"snapshots":{"opkg":"2026-01-01T00:00:00Z","apk":"2026-01-01T00:00:00Z"}},
  "channels":{
-  "releases":{"opkg":[{"pkg":"luci-theme-aurora","version":"1.1.0-r20260711","file":"luci-theme-aurora_1.1.0-r20260711_all.ipk","size":206234,"sha256":"0"}],"apk":[]},
-  "snapshots":{"opkg":[{"pkg":"luci-theme-aurora","version":"1.1.2-r20260723","file":"luci-theme-aurora_1.1.2-r20260723_all.ipk","size":206234,"sha256":"0"},
-                       {"pkg":"luci-i18n-aurora-config-de","version":"26.193.44843~1de9ea1","file":"luci-i18n-aurora-config-de_26.193.44843~1de9ea1_all.ipk","size":7960,"sha256":"0"}],"apk":[]}}}
+  "snapshots":{"opkg":[{"pkg":"luci-theme-aurora","version":"1.1.2-r20260723","file":"luci-theme-aurora_1.1.2-r20260723_all.ipk","size":206234,"sha256":"0","arch":"all","source":"luci-theme-aurora","ref":"0"},
+                       {"pkg":"luci-i18n-aurora-config-de","version":"26.193.44843~1de9ea1","file":"luci-i18n-aurora-config-de_26.193.44843~1de9ea1_all.ipk","size":7960,"sha256":"0","arch":"all","source":"luci-app-aurora-config","ref":"0"}],"apk":[]}},
+ "arches":{}}
 EOF
   echo "manifest: built-in sample (set PREVIEW_MANIFEST_URL to use a live one)"
 fi
