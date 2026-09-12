@@ -133,7 +133,7 @@ jobs:
           APK_KEY: ${{ secrets.APK_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          jq -c '.cells[]' plan.json | while read -r c; do
+          jq -c '[.cells[] | {dir, fmt, target}] | unique | .[]' plan.json | while read -r c; do
             dir=$(jq -r .dir <<<"$c"); fmt=$(jq -r .fmt <<<"$c"); target=$(jq -r .target <<<"$c")
             feed/scripts/index-dir.sh "dist/$dir" "$fmt" "$target" "tools/tools-$fmt"
           done

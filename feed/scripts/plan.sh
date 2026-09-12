@@ -6,7 +6,8 @@ die() { echo "plan: $*" >&2; exit 1; }
 
 jq -e 'type=="object" and (.feed|type)=="string" and (.sdk|type)=="object" and (.packages|type)=="array"' "$cfg" >/dev/null || die "bad config shape"
 jq -e '(keys - ["feed","sdk","arches","packages"]) == []' "$cfg" >/dev/null || die "unknown top-level key"
-jq -e '.packages | all(.[]; (keys - ["pkg","repo","ref","feed","arch","langs"]) == [] and has("pkg") and has("repo"))' "$cfg" >/dev/null || die "bad package entry"
+jq -e '.packages | all(.[]; (keys - ["pkg","repo","ref","feed","arch","langs","formats"]) == [] and has("pkg") and has("repo"))' "$cfg" >/dev/null || die "bad package entry"
+jq -e --argjson F "$(jq -c '.sdk|keys' "$cfg")" '.packages | all(.[]; (has("formats")|not) or ((.formats|type)=="array" and (.formats - $F) == []))' "$cfg" >/dev/null || die "formats must be a subset of the sdk keys"
 
 feed=$(jq -r .feed "$cfg")
 fmts=$(jq -r '.sdk|keys[]' "$cfg")
@@ -36,7 +37,7 @@ while read -r e; do
   pkgs=$(jq -c --arg u "$url" --arg s "$sha" --argjson e "$e" '
     . + [ ($e | (if has("feed") then "feed" else "repo" end) as $kind
           | {pkg, kind:$kind, url:$u, ref:$s} + (if $kind=="feed" then {feed} else {} end)
-          + {arch:(.arch // "all"), langs:(.langs // [])}) ]' <<<"$pkgs")
+          + {arch:(.arch // "all"), langs:(.langs // []), formats:(.formats // null)}) ]' <<<"$pkgs")
 done < <(jq -c '.packages[]' "$cfg")
 
 arches=$(jq -r '.arches // empty | .[]' "$cfg" | sort -u)
@@ -52,19 +53,31 @@ cells='[]'
 for f in $fmts; do
   sdk=$(jq -r --arg f "$f" '.sdk[$f]' "$cfg")
   cells=$(jq -c --arg f "$f" --arg sdk "$sdk" --argjson P "$pkgs" --argjson H "$present" '
-    def fresh(t): ("\($f)|\(t)|\(.pkg)|\(.ref)") as $k | ($H | index($k)) != null;
+    def infmt: select(.formats == null or (.formats|index($f)) != null);
+    def fresh: ("\($f)|noarch|\(.pkg)|\(.ref)") as $k | ($H | index($k)) != null;
     def spec: {pkg, repo:.url, ref} + (if .kind=="feed" then {feed} else {} end) + {arch, langs};
-    . + [{id:"\($f)-noarch", fmt:$f, sdk:$sdk, target:"noarch", arch:"x86_64", dir:"snapshots/\($f)",
-          build:[$P[] | select(.arch=="all" and (fresh("noarch")|not)) | spec],
-          reuse:[$P[] | select(.arch=="all" and fresh("noarch")) | .pkg]}]' <<<"$cells")
+    def ovkey: if .kind=="feed" then "\(.feed)@\(.ref)" else "" end;
+    ([$P[] | infmt | select(.arch=="all")]) as $A
+    | . + [{id:"\($f)-noarch", fmt:$f, sdk:$sdk, target:"noarch", arch:"x86_64", dir:"snapshots/\($f)", override:"",
+            build:[$A[] | select(.kind!="feed" and (fresh|not)) | spec],
+            reuse:[$A[] | select(fresh) | .pkg]}]
+      + ([ $A[] | select(.kind=="feed" and (fresh|not)) | ovkey ] | unique
+         | map(. as $k | {id:"\($f)-noarch-\($k|split("@")[0])", fmt:$f, sdk:$sdk, target:"noarch", arch:"x86_64", dir:"snapshots/\($f)", override:$k,
+                          build:[$A[] | select(.kind=="feed" and ovkey==$k and (fresh|not)) | spec], reuse:[]}))' <<<"$cells")
   for a in $arches; do
     cells=$(jq -c --arg f "$f" --arg sdk "$sdk" --arg a "$a" --argjson P "$pkgs" --argjson H "$present" '
+      def infmt: select(.formats == null or (.formats|index($f)) != null);
       def forarch: select(.arch=="any" or ((.arch|type)=="array" and (.arch|index($a))!=null));
       def fresh: ("\($f)|\($a)|\(.pkg)|\(.ref)") as $k | ($H | index($k)) != null;
       def spec: {pkg, repo:.url, ref} + (if .kind=="feed" then {feed} else {} end) + {arch, langs};
-      . + [{id:"\($f)-\($a)", fmt:$f, sdk:$sdk, target:$a, arch:$a, dir:"snapshots/\($f)/\($a)",
-            build:[$P[] | forarch | select(fresh|not) | spec],
-            reuse:[$P[] | forarch | select(fresh) | .pkg]}]' <<<"$cells")
+      def ovkey: if .kind=="feed" then "\(.feed)@\(.ref)" else "" end;
+      ([$P[] | infmt | forarch]) as $A
+      | . + [{id:"\($f)-\($a)", fmt:$f, sdk:$sdk, target:$a, arch:$a, dir:"snapshots/\($f)/\($a)", override:"",
+              build:[$A[] | select(.kind!="feed" and (fresh|not)) | spec],
+              reuse:[$A[] | select(fresh) | .pkg]}]
+      + ([ $A[] | select(.kind=="feed" and (fresh|not)) | ovkey ] | unique
+         | map(. as $k | {id:"\($f)-\($a)-\($k|split("@")[0])", fmt:$f, sdk:$sdk, target:$a, arch:$a, dir:"snapshots/\($f)/\($a)", override:$k,
+                          build:[$A[] | select(.kind=="feed" and ovkey==$k and (fresh|not)) | spec], reuse:[]}))' <<<"$cells")
   done
 done
 

@@ -27,13 +27,15 @@ cell_packages() {
   done
 }
 
-jq -c '.cells[]' "$plan" | while read -r cell; do
-  dir=$(jq -r .dir <<<"$cell"); fmt=$(jq -r .fmt <<<"$cell"); target=$(jq -r .target <<<"$cell"); sdk=$(jq -r .sdk <<<"$cell")
+jq -r '[.cells[].dir] | unique | .[]' "$plan" | while read -r dir; do
+  first=$(jq -c --arg d "$dir" '[.cells[] | select(.dir==$d)][0]' "$plan")
+  fmt=$(jq -r .fmt <<<"$first"); target=$(jq -r .target <<<"$first"); sdk=$(jq -r .sdk <<<"$first")
   dst="$dist/$dir"; rm -rf "$dst"; mkdir -p "$dst"
-  pk=$(cell_packages "$cell" "$dst")
+  pk=""
+  while read -r cell; do pk="$pk"$'\n'"$(cell_packages "$cell" "$dst")"; done < <(jq -c --arg d "$dir" '.cells[] | select(.dir==$d)' "$plan")
   if [ "$target" != noarch ]; then
-    noarch=$(jq -c --arg f "$fmt" '.cells[] | select(.fmt==$f and .target=="noarch")' "$plan")
-    pk="$pk"$'\n'"$(cell_packages "$noarch" "$dst")"
+    while read -r cell; do pk="$pk"$'\n'"$(cell_packages "$cell" "$dst")"; done \
+      < <(jq -c --arg f "$fmt" '.cells[] | select(.fmt==$f and .target=="noarch")' "$plan")
   fi
   printf '%s\n' "$pk" | grep -v '^$' | jq -sc --arg sdk "$sdk" --arg a "$target" --arg t "$fmt" \
     '{sdk:$sdk, arch:$a, pkg_type:(if $t=="opkg" then "ipk" else "apk" end), packages:.}' > "$dst/build-info.json"

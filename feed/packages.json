@@ -8,6 +8,6 @@
     { "pkg": "luci-app-aurora-config", "repo": "eamonxg/luci-app-aurora-config",
       "langs": ["zh-cn","zh-tw","de","es","fr","id","it","ja","ko","nl","pl","ru","tr","uk","vi"] },
     { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "dashboard-redesign",
-      "feed": "luci", "langs": ["zh-cn"] }
+      "feed": "luci", "formats": ["apk"], "langs": ["zh-cn"] }
   ]
 }
