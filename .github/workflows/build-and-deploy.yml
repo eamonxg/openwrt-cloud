@@ -97,7 +97,7 @@ jobs:
       - uses: actions/upload-artifact@v6
         with:
           name: cell-${{ matrix.id }}
-          path: art/${{ matrix.id }}
+          path: art
 
   deploy:
     runs-on: ubuntu-latest
@@ -112,17 +112,13 @@ jobs:
         with:
           pattern: cell-*
           path: art
+          merge-multiple: true
       - uses: actions/download-artifact@v6
         with:
           pattern: tools-*
           path: tools
       - name: Normalise artifact layout
-        run: |
-          set -euo pipefail
-          mkdir -p art2
-          for d in art/cell-*; do [ -d "$d" ] && mv "$d" "art2/${d#art/cell-}"; done
-          rm -rf art && mv art2 art
-          chmod +x tools/*/*
+        run: chmod +x tools/*/*
       - name: Reuse unchanged files
         run: feed/scripts/fetch-unchanged.sh plan.json live.json "https://${{ vars.FEED_HOST }}" cache
       - name: Assemble
