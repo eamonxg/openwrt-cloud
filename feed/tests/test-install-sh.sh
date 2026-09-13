@@ -58,6 +58,7 @@ assert_out "opkg install luci-theme-aurora"
 refute_log "opkg install luci-theme-aurora"
 grep -q "src/gz eamonxg https://feed.example.test/snapshots/opkg" \
   "$tmp/root/etc/opkg/customfeeds.conf" || { echo "FAIL: feed line not written"; fail=1; }
+assert_out "Package manager: opkg  |  arch: aarch64_cortex-a53"
 
 # --- non-root exits early with a clear message -------------------------------
 setup_sandbox opkg

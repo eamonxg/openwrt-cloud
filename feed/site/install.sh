@@ -31,6 +31,8 @@ else
   exit 1
 fi
 command -v "$PM" >/dev/null 2>&1 || { echo "$PM database found but $PM binary is missing" >&2; exit 1; }
+ARCH=""
+[ -f "$ROOT/etc/openwrt_release" ] && ARCH=$(. "$ROOT/etc/openwrt_release" 2>/dev/null; printf '%s' "${DISTRIB_ARCH:-}")
 echo "Package manager: $PM  |  arch: ${ARCH:-unknown}"
 
 # fetch <url> <dest> — OpenWrt's default wget is uclient-fetch, which cannot do
@@ -55,8 +57,6 @@ drop_lines() {
 # Step 2: import the signing key and add the feed. The arch directory carries
 # every package (universal ones included); the universal directory is the
 # fallback for arches this feed does not build for.
-ARCH=""
-[ -f "$ROOT/etc/openwrt_release" ] && ARCH=$(. "$ROOT/etc/openwrt_release" 2>/dev/null; printf '%s' "${DISTRIB_ARCH:-}")
 SUBDIR=""
 case " $ARCHES " in *" $ARCH "*) [ -n "$ARCH" ] && SUBDIR="$ARCH/" ;; esac
 if [ -n "$ARCHES" ] && [ -z "$SUBDIR" ]; then
