@@ -165,12 +165,19 @@ jobs:
         run: |
           set -euo pipefail
           host="${{ vars.FEED_HOST }}"
-          for i in $(seq 1 10); do curl -fsS "https://$host/manifest.json" -o /tmp/m && break; sleep 30; done
-          feed/scripts/verify-feed.sh "https://$host" apk  snapshots/apk  tools/tools-apk  dist/eamonxg.pem luci-theme-aurora luci-theme-shadcn luci-app-aurora-config
-          feed/scripts/verify-feed.sh "https://$host" opkg snapshots/opkg tools/tools-opkg dist/eamonxg.pub luci-theme-aurora luci-theme-shadcn luci-app-aurora-config
-          for a in $(jq -r '.arches[]' plan.json); do
-            feed/scripts/verify-feed.sh "https://$host" apk "snapshots/apk/$a" tools/tools-apk dist/eamonxg.pem luci-theme-aurora
+          verify() {
+            feed/scripts/verify-feed.sh "https://$host" apk  snapshots/apk  tools/tools-apk  dist/eamonxg.pem luci-theme-aurora luci-theme-shadcn luci-app-aurora-config || return 1
+            feed/scripts/verify-feed.sh "https://$host" opkg snapshots/opkg tools/tools-opkg dist/eamonxg.pub luci-theme-aurora luci-theme-shadcn luci-app-aurora-config || return 1
+            for a in $(jq -r '.arches[]' plan.json); do
+              feed/scripts/verify-feed.sh "https://$host" apk "snapshots/apk/$a" tools/tools-apk dist/eamonxg.pem luci-theme-aurora || return 1
+            done
+          }
+          for i in $(seq 1 12); do
+            verify && exit 0
+            echo "live verify attempt $i failed; the edge can serve the previous index for up to 600s, retrying in 60s"
+            sleep 60
           done
+          verify
       - uses: actions/upload-artifact@v6
         if: ${{ inputs.dry_run }}
         with:
