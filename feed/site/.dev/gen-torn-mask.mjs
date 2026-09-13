@@ -75,10 +75,11 @@ function sideMask(L, right) {
   const noise = makeNoise(TILE, wl.side, oct);
   const bx = y => clamp(mean + amp * noise(y), .5, W - .5);
   const pts = [];
-  for (let y = TILE; y >= 0; y -= 3) {
+  for (let y = TILE; y > 0; y -= 3) {
     const x = bx(Math.min(y, TILE - .001));
     pts.push(`L${F(right ? W - x : x)},${y}`);
   }
+  pts.push(`L${F(right ? W - bx(0) : bx(0))},0`);
   const inner = right ? 0 : W;
   return svgOf(W, TILE, `M${inner},0L${inner},${TILE}${pts.join('')}Z`);
 }
