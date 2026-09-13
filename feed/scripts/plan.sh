@@ -8,6 +8,7 @@ jq -e 'type=="object" and (.feed|type)=="string" and (.sdk|type)=="object" and (
 jq -e '(keys - ["feed","sdk","arches","packages"]) == []' "$cfg" >/dev/null || die "unknown top-level key"
 jq -e '.packages | all(.[]; (keys - ["pkg","repo","ref","feed","arch","langs","formats"]) == [] and has("pkg") and has("repo"))' "$cfg" >/dev/null || die "bad package entry"
 jq -e --argjson F "$(jq -c '.sdk|keys' "$cfg")" '.packages | all(.[]; (has("formats")|not) or ((.formats|type)=="array" and (.formats - $F) == []))' "$cfg" >/dev/null || die "formats must be a subset of the sdk keys"
+jq -e --argjson F "$(jq -c '.sdk|keys' "$cfg")" '[.packages[] | .pkg as $p | (.formats // $F)[] | "\(.)|\($p)"] | length == (unique|length)' "$cfg" >/dev/null || die "a package is listed twice for one format"
 
 feed=$(jq -r .feed "$cfg")
 fmts=$(jq -r '.sdk|keys[]' "$cfg")
