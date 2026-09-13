@@ -90,11 +90,28 @@ fi
 #   installed-or-not — the decision input, straight from the package manager
 #                      database, authoritative
 #   version strings  — display only, best effort. opkg and apk version schemes
-#                      are not comparable, so the script never orders them; it
-#                      only ever shows them.
+#                      are not comparable, so the script never orders them
+#                      itself; picking the newest is left to the package
+#                      manager's own comparison.
 
-apk_ver() { # <pkg>; reads one `apk list` line on stdin, writes the version
-  awk -v p="$1" '{ n = $1; sub("^" p "-", "", n); print n; exit }'
+apk_ver() { # <pkg>; reads `apk list` lines on stdin, writes each version
+  awk -v p="$1" '{ n = $1; sub("^" p "-", "", n); print n }'
+}
+
+newer() { # <a> <b> — true when a sorts after b
+  if [ "$PM" = apk ]; then
+    [ "$(apk version -t "$1" "$2" 2>/dev/null)" = ">" ]
+  else
+    opkg compare-versions "$1" '>>' "$2" 2>/dev/null
+  fi
+}
+
+newest() { # reads versions on stdin, writes the highest
+  best=""
+  while read -r v; do
+    if [ -z "$best" ] || newer "$v" "$best"; then best=$v; fi
+  done
+  echo "$best"
 }
 
 is_installed() { # <pkg>
@@ -113,11 +130,11 @@ installed_ver() { # <pkg>
   fi
 }
 
-avail_ver() { # <pkg>
+avail_ver() { # <pkg> — the same name may be listed by several indexes
   if [ "$PM" = apk ]; then
-    apk list "$1" 2>/dev/null | apk_ver "$1"
+    apk list "$1" 2>/dev/null | apk_ver "$1" | newest
   else
-    opkg list "$1" 2>/dev/null | awk -v p="$1" '$1 == p { print $3; exit }'
+    opkg list "$1" 2>/dev/null | awk -v p="$1" '$1 == p { print $3 }' | newest
   fi
 }
 

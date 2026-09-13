@@ -85,6 +85,18 @@ assert_out "installed 1.0.1"
 assert_log "opkg list-installed luci-theme-shadcn"
 assert_log "opkg list luci-theme-aurora"
 
+# --- the available version is the highest across every configured feed ------
+# The same name can come from an official repository as well as this feed, and
+# the package managers list the older copy first.
+setup_sandbox apk
+run_install "" FAKE_AVAIL="luci-theme-shadcn=0.5.1 luci-theme-shadcn=0.5.2"
+grep -qE '^  luci-theme-shadcn +0\.5\.2 ' <<<"$out" \
+  || { echo "FAIL: apk listing should show the highest available version"; echo "$out"; fail=1; }
+setup_sandbox opkg
+run_install "" FAKE_AVAIL="luci-theme-shadcn=0.5.1 luci-theme-shadcn=0.5.2"
+grep -qE '^  luci-theme-shadcn +0\.5\.2 ' <<<"$out" \
+  || { echo "FAIL: opkg listing should show the highest available version"; echo "$out"; fail=1; }
+
 # --- PKGS= picks the verb per package ---------------------------------------
 setup_sandbox opkg
 run_install "" YES=1 PKGS="luci-theme-aurora luci-theme-shadcn" \
