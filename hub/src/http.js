@@ -19,6 +19,14 @@ export function errorResponse(status, code, message) {
   return jsonResponse({ error: { code, message } }, { status });
 }
 
+export function toErrorResponse(err) {
+  if (err instanceof HttpError) {
+    return errorResponse(err.status, err.code, err.message);
+  }
+  console.error(err);
+  return errorResponse(500, "internal_error", "Something went wrong.");
+}
+
 // CORS: LuCI frontends call the API straight from the router's origin.
 // Read endpoints are public data and write endpoints authenticate via the
 // device token carried in the body, so a wildcard origin does not widen
@@ -93,6 +101,14 @@ export async function readJsonBounded(request, maxBytes) {
   } catch {
     throw new HttpError(400, "bad_json", "Request body must be valid JSON.");
   }
+}
+
+export async function readJsonObject(request, maxBytes) {
+  const body = await readJsonBounded(request, maxBytes);
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new HttpError(400, "bad_json", "Request body must be a JSON object.");
+  }
+  return body;
 }
 
 // The optional `{reason}` that purge and ban accept. Deliberately total: an

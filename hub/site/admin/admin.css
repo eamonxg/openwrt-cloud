@@ -199,3 +199,42 @@
   .confirm-box h3 { margin: 0; }
   .confirm-box p { margin: 0; font-size: 0.85rem; }
   .confirm-box .card-actions { justify-content: flex-end; margin-top: 0.25rem; }
+
+  .panel-form { padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border); }
+  .form-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 0.6rem 0.75rem; max-width: 960px; margin: 0 auto;
+  }
+  .form-grid label { display: grid; gap: 0.25rem; font-size: 0.8rem; color: var(--text-muted); }
+  .form-grid .wide { grid-column: 1 / -1; }
+  .form-grid .card-actions { margin-top: 0; }
+  .form-grid :is(input, select, textarea), table.rows :is(input, select) {
+    font: inherit;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 0.4rem;
+    padding: 0.45rem 0.6rem;
+  }
+  .form-grid textarea { resize: vertical; }
+  table.rows input[type="number"] { width: 6rem; }
+  table.rows.compact :is(.badge, button, th) { white-space: nowrap; }
+
+  .md-field { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr)); gap: 0.6rem 0.75rem; }
+  .md-preview {
+    min-width: 0; padding: 0.45rem 0.75rem; overflow-wrap: anywhere; font-size: 0.85rem;
+    background: var(--panel); border: 1px dashed var(--border); border-radius: 0.4rem;
+  }
+  .md-preview:empty::before { content: "预览"; color: var(--text-muted); }
+  .md-preview > * { margin: 0 0 0.5rem; }
+  .md-preview > :last-child { margin-bottom: 0; }
+  .md-preview :is(h4, h5, h6) { font-size: 0.95rem; }
+  .md-preview h5 { font-size: 0.9rem; }
+  .md-preview h6 { font-size: 0.85rem; color: var(--text-muted); }
+  .md-preview :is(ul, ol) { padding-left: 1.25rem; }
+  .md-preview blockquote { padding-left: 0.6rem; border-left: 3px solid var(--border); color: var(--text-muted); }
+  .md-preview code { font-size: 0.8rem; background: var(--panel-2); border-radius: 0.25rem; padding: 0.05rem 0.3rem; }
+  .md-preview pre { padding: 0.5rem 0.6rem; overflow-x: auto; background: var(--panel-2); border-radius: 0.4rem; }
+  .md-preview pre code { padding: 0; background: none; }
+  .md-preview hr { border: 0; border-top: 1px solid var(--border); }
+  .md-preview a { color: var(--accent); }

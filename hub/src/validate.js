@@ -97,6 +97,9 @@ const MAX_PAYLOAD_JSON_LENGTH = 262144; // 256 * 1024
 
 // Global constraint: strip U+0000-U+001F and U+007F before use.
 const CONTROL_CHARS_PATTERN = new RegExp("[\u0000-\u001F\u007F]", "g");
+// Markdown is line-based: tab and line feed stay, which is also what the
+// client renderer keeps.
+const MARKDOWN_CONTROL_CHARS_PATTERN = new RegExp("[\u0000-\u0008\u000B-\u001F\u007F]", "g");
 
 const HEX_COLOR_PATTERN = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const REM_PATTERN = /^(\d+(\.\d+)?)rem$/;
@@ -144,9 +147,9 @@ function badMeta(message = "Invalid metadata.") {
 // Text cleaning (Global Constraints: strip control chars, NFC normalize)
 // ---------------------------------------------------------------------------
 
-export function cleanText(value, makeError) {
+export function cleanText(value, makeError, controlChars = CONTROL_CHARS_PATTERN) {
   if (typeof value !== "string") throw makeError();
-  return value.replace(CONTROL_CHARS_PATTERN, "").normalize("NFC");
+  return value.replace(controlChars, "").normalize("NFC");
 }
 
 function isPlainObject(value) {
@@ -403,4 +406,193 @@ export function validateNickname(value) {
   if (nickname.length < 1 || nickname.length > NICKNAME_MAX) throw badNickname();
 
   return { nickname, nickname_lc: nickname.toLowerCase() };
+}
+
+// ---------------------------------------------------------------------------
+// Notices and schema policies (admin input)
+// ---------------------------------------------------------------------------
+
+export const THEMES = ["aurora"];
+export const NOTICE_THEME_ANY = "*";
+export const NOTICE_LEVELS = ["info", "warning", "critical"];
+export const NOTICE_AUDIENCES = ["all", "creators"];
+export const NOTICE_TITLE_MAX = 120;
+export const NOTICE_BODY_MAX = 4000;
+export const NOTICE_URL_MAX = 500;
+export const SCHEMA_STATES = ["current", "deprecated", "unsupported"];
+
+const NOTICE_KEYS = new Set([
+  "theme", "level", "audience", "title", "body", "url", "i18n",
+  "min_schema", "max_schema", "starts_at", "expires_at",
+]);
+const NOTICE_I18N_KEYS = new Set(["title", "body"]);
+const NOTICE_LOCALE_PATTERN = /^[a-z]{2}(-[a-z]{2,4})?$/;
+const NOTICE_HTTPS_PREFIX = "https://";
+const NOTICE_LUCI_PATH_PATTERN = /^admin(\/[A-Za-z0-9_-]+)+$/;
+const SCHEMA_POLICY_KEYS = new Set(["state", "sunset_at"]);
+
+const TIMESTAMP_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+const MS_PER_MINUTE = 60000;
+
+function badNotice(message) {
+  return new HttpError(400, "bad_notice", message);
+}
+function badPolicy(message) {
+  return new HttpError(400, "bad_policy", message);
+}
+
+export function isPositiveInt(value) {
+  return Number.isSafeInteger(value) && value >= 1;
+}
+
+// Date.parse is not used: V8 rolls "02-30" over into March and accepts free
+// text like "soon 5". A zone-less time is read as UTC, which is what the
+// stored `YYYY-MM-DD HH:MM:SS` text means everywhere else in this database.
+export function normalizeTimestamp(value, makeError) {
+  if (value === null || value === undefined) return null;
+  const match = typeof value === "string" ? TIMESTAMP_PATTERN.exec(value.trim()) : null;
+  if (!match) throw makeError();
+
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map((part) => Number(part ?? 0));
+  const wall = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  const sameCalendarDay =
+    wall.getUTCFullYear() === year && wall.getUTCMonth() === month - 1 && wall.getUTCDate() === day;
+  if (!sameCalendarDay || hour > 23 || minute > 59 || second > 59) throw makeError();
+
+  const zone = match[7];
+  let offsetMinutes = 0;
+  if (zone && zone !== "Z") {
+    const [zoneHours, zoneMinutes] = zone.slice(1).split(":").map(Number);
+    if (zoneHours > 23 || zoneMinutes > 59) throw makeError();
+    offsetMinutes = (zone[0] === "-" ? -1 : 1) * (zoneHours * 60 + zoneMinutes);
+  }
+
+  return new Date(wall.getTime() - offsetMinutes * MS_PER_MINUTE)
+    .toISOString()
+    .slice(0, 19)
+    .replace("T", " ");
+}
+
+function validateNoticeUrl(value) {
+  const url = cleanText(value ?? "", () => badNotice("url must be a string.")).trim();
+  if (url === "") return "";
+  if (url.length > NOTICE_URL_MAX) throw badNotice(`url must be at most ${NOTICE_URL_MAX} characters.`);
+  if (NOTICE_LUCI_PATH_PATTERN.test(url)) return url;
+
+  let parsed = null;
+  if (url.startsWith(NOTICE_HTTPS_PREFIX) && !/\s/.test(url)) {
+    try {
+      parsed = new URL(url);
+    } catch {
+      parsed = null;
+    }
+  }
+  // Credentials are refused because "https://trusted.example@evil.example"
+  // reads as the first host and resolves to the second.
+  if (!parsed || parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    throw badNotice("url must be empty, an https:// URL, or a LuCI path starting with admin/.");
+  }
+  return url;
+}
+
+function validateNoticeText(value, label, { min, max, markdown = false }) {
+  const text = cleanText(
+    value,
+    () => badNotice(`${label} must be a string.`),
+    markdown ? MARKDOWN_CONTROL_CHARS_PATTERN : CONTROL_CHARS_PATTERN
+  ).trim();
+  if (text.length < min || text.length > max) {
+    throw badNotice(`${label} must be ${min}-${max} characters.`);
+  }
+  return text;
+}
+
+function validateNoticeI18n(value) {
+  if (value === undefined || value === null) return {};
+  if (!isPlainObject(value)) throw badNotice("i18n must be an object.");
+
+  const cleaned = {};
+  for (const [locale, entry] of Object.entries(value)) {
+    if (!NOTICE_LOCALE_PATTERN.test(locale)) throw badNotice(`i18n key "${locale}" is not a locale.`);
+    if (!isPlainObject(entry)) throw badNotice(`i18n.${locale} must be an object.`);
+    for (const key of Object.keys(entry)) {
+      if (!NOTICE_I18N_KEYS.has(key)) throw badNotice(`i18n.${locale} only takes title and body.`);
+    }
+
+    const texts = {};
+    if (entry.title !== undefined) {
+      texts.title = validateNoticeText(entry.title, `i18n.${locale}.title`, { min: 1, max: NOTICE_TITLE_MAX });
+    }
+    if (entry.body !== undefined) {
+      texts.body = validateNoticeText(entry.body, `i18n.${locale}.body`, { min: 0, max: NOTICE_BODY_MAX, markdown: true });
+    }
+    cleaned[locale] = texts;
+  }
+  return cleaned;
+}
+
+function validateSchemaBound(value, label) {
+  if (value === undefined || value === null) return null;
+  if (!isPositiveInt(value)) throw badNotice(`${label} must be null or a positive integer.`);
+  return value;
+}
+
+// Unknown keys are refused rather than ignored: a misspelt `expire_at` would
+// otherwise publish a broadcast that never ends.
+export function validateNotice(input) {
+  if (!isPlainObject(input)) throw badNotice("Notice must be an object.");
+  for (const key of Object.keys(input)) {
+    if (!NOTICE_KEYS.has(key)) throw badNotice(`Unknown field: ${key}`);
+  }
+
+  if (!THEMES.includes(input.theme) && input.theme !== NOTICE_THEME_ANY) {
+    throw badNotice(`theme must be one of ${[...THEMES, NOTICE_THEME_ANY].join(", ")}.`);
+  }
+  if (!NOTICE_LEVELS.includes(input.level)) {
+    throw badNotice(`level must be one of ${NOTICE_LEVELS.join(", ")}.`);
+  }
+  if (!NOTICE_AUDIENCES.includes(input.audience)) {
+    throw badNotice(`audience must be one of ${NOTICE_AUDIENCES.join(", ")}.`);
+  }
+
+  const min_schema = validateSchemaBound(input.min_schema, "min_schema");
+  const max_schema = validateSchemaBound(input.max_schema, "max_schema");
+  if (min_schema !== null && max_schema !== null && min_schema > max_schema) {
+    throw badNotice("min_schema must not exceed max_schema.");
+  }
+
+  const starts_at = normalizeTimestamp(input.starts_at, () => badNotice("starts_at is not a timestamp."));
+  const expires_at = normalizeTimestamp(input.expires_at, () => badNotice("expires_at is not a timestamp."));
+  if (starts_at !== null && expires_at !== null && starts_at >= expires_at) {
+    throw badNotice("starts_at must be earlier than expires_at.");
+  }
+
+  return {
+    theme: input.theme,
+    level: input.level,
+    audience: input.audience,
+    title: validateNoticeText(input.title, "title", { min: 1, max: NOTICE_TITLE_MAX }),
+    body: validateNoticeText(input.body ?? "", "body", { min: 0, max: NOTICE_BODY_MAX, markdown: true }),
+    url: validateNoticeUrl(input.url),
+    i18n: validateNoticeI18n(input.i18n),
+    min_schema,
+    max_schema,
+    starts_at,
+    expires_at,
+  };
+}
+
+export function validateSchemaPolicy(input) {
+  if (!isPlainObject(input)) throw badPolicy("Policy must be an object.");
+  for (const key of Object.keys(input)) {
+    if (!SCHEMA_POLICY_KEYS.has(key)) throw badPolicy(`Unknown field: ${key}`);
+  }
+  if (!SCHEMA_STATES.includes(input.state)) {
+    throw badPolicy(`state must be one of ${SCHEMA_STATES.join(", ")}.`);
+  }
+  return {
+    state: input.state,
+    sunset_at: normalizeTimestamp(input.sunset_at, () => badPolicy("sunset_at is not a timestamp.")),
+  };
 }

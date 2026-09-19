@@ -361,3 +361,129 @@ export function renderLogList(container, items, handlers) {
 
   container.replaceChildren(tableOf(["时间", "actor", "action", "target", "note"], body, "plain"));
 }
+
+// ---------------------------------------------------------------------------
+// 通知
+// ---------------------------------------------------------------------------
+
+const NOTICE_STATUS_BADGES = {
+  active: { class: "badge active", text: "生效中" },
+  scheduled: { class: "badge pending", text: "未生效" },
+  expired: { class: "badge removed", text: "已过期" },
+  revoked: { class: "badge purged", text: "已撤回" },
+};
+
+const NOTICE_LEVEL_BADGES = {
+  info: "badge removed",
+  warning: "badge pending",
+  critical: "badge purged",
+};
+
+function schemaWindow(item) {
+  if (item.min_schema === null && item.max_schema === null) return "全部 schema";
+  if (item.max_schema === null) return `schema ≥ ${item.min_schema}`;
+  if (item.min_schema === null) return `schema ≤ ${item.max_schema}`;
+  return `schema ${item.min_schema}–${item.max_schema}`;
+}
+
+export function renderNoticeList(container, items, handlers) {
+  if (items.length === 0) {
+    container.replaceChildren(el("div", { class: "empty", text: "还没有发布过任何通知。" }));
+    return;
+  }
+
+  const body = el("tbody");
+  for (const item of items) {
+    const status = NOTICE_STATUS_BADGES[item.status] || { class: "badge removed", text: item.status };
+    const locales = Object.keys(item.i18n || {});
+    const revocable = item.status === "active" || item.status === "scheduled";
+
+    body.append(
+      el("tr", null, [
+        el("td", null, [
+          el("div", { text: item.title }),
+          item.body ? el("div", { class: "history-note", text: item.body }) : null,
+          item.url ? el("div", null, [el("code", { text: item.url })]) : null,
+          el("small", { class: "muted", text: locales.length ? `${item.id} · ${locales.join(", ")}` : item.id }),
+        ]),
+        el("td", null, [el("span", { class: NOTICE_LEVEL_BADGES[item.level] || "badge removed", text: item.level })]),
+        el("td", { text: item.audience }),
+        el("td", { text: `${item.theme} · ${schemaWindow(item)}` }),
+        el("td", { text: `${item.starts_at || "立即"} → ${item.expires_at || "不过期"}` }),
+        el("td", null, [el("span", { class: status.class, text: status.text })]),
+        el("td", { text: item.created_at }),
+        el("td", null, [revocable ? rowButton("撤回", () => handlers.revoke(item)) : null]),
+      ])
+    );
+  }
+
+  container.replaceChildren(
+    tableOf(["通知", "级别", "受众", "范围", "生效窗口 (UTC)", "状态", "创建 (UTC)", ""], body, "plain compact")
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Schema 策略
+// ---------------------------------------------------------------------------
+
+const SCHEMA_STATES = ["current", "deprecated", "unsupported"];
+const MS_PER_MINUTE = 60000;
+
+// 服务端给的是 UTC 文本,datetime-local 要的是本地墙上时间。
+function utcTextToLocalInput(text) {
+  if (!text) return "";
+  const utc = new Date(text.replace(" ", "T") + "Z");
+  return new Date(utc.getTime() - utc.getTimezoneOffset() * MS_PER_MINUTE).toISOString().slice(0, 16);
+}
+
+function policyControls(item) {
+  const select = el("select");
+  for (const state of SCHEMA_STATES) {
+    const option = el("option", { value: state, text: state });
+    option.selected = state === item.state;
+    select.append(option);
+  }
+  const sunset = el("input", { type: "datetime-local" });
+  sunset.value = utcTextToLocalInput(item.sunset_at);
+  return { select, sunset };
+}
+
+export function renderSchemaList(container, items, handlers) {
+  const body = el("tbody");
+  for (const item of items) {
+    const { select, sunset } = policyControls(item);
+    body.append(
+      el("tr", null, [
+        el("td", { text: item.theme }),
+        el("td", { text: String(item.schema) }),
+        el("td", { text: String(item.active_configs) }),
+        el("td", null, [select]),
+        el("td", null, [sunset]),
+        el("td", { text: item.updated_at || "(无策略行,按 current)" }),
+        el("td", null, [rowButton("保存", () => handlers.save(item.theme, String(item.schema), select.value, sunset.value))]),
+      ])
+    );
+  }
+
+  // 新 schema 上线时还没有任何配置,它不会自己出现在上面 —— 而 /me 的
+  // current_schema 只认有策略行的 schema。
+  const schemaInput = el("input", { type: "number", min: "1", step: "1", placeholder: "schema" });
+  const added = policyControls({ state: "current", sunset_at: null });
+  body.append(
+    el("tr", null, [
+      el("td", { text: "aurora" }),
+      el("td", null, [schemaInput]),
+      el("td", { text: "—" }),
+      el("td", null, [added.select]),
+      el("td", null, [added.sunset]),
+      el("td", { class: "muted", text: "新增策略" }),
+      el("td", null, [
+        rowButton("新增", () => handlers.save("aurora", schemaInput.value.trim(), added.select.value, added.sunset.value)),
+      ]),
+    ])
+  );
+
+  container.replaceChildren(
+    tableOf(["theme", "schema", "在架配置", "状态", "截止 (本地时间)", "更新于 (UTC)", ""], body, "plain compact")
+  );
+}

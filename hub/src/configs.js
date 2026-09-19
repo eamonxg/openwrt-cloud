@@ -14,6 +14,7 @@ import {
 } from "./assets.js";
 import { jsonResponse, errorResponse, readJsonBounded, MAX_BODY_BYTES } from "./http.js";
 import { softTakedown, purgeConfig } from "./lifecycle.js";
+import { parseClientSchema, compatOf } from "./schema-policy.js";
 
 function todayUtc() {
   return new Date().toISOString().slice(0, 10);
@@ -256,6 +257,7 @@ async function listConfigs(request, env, theme) {
   const url = new URL(request.url);
   const sort = parseSort(url);
   const page = parsePage(url);
+  const clientSchema = parseClientSchema(url);
   const offset = (page - 1) * PAGE_SIZE;
   // `sort` is one of exactly two hardcoded literals (never user-interpolated
   // beyond that ternary), so building the ORDER BY clause this way carries no
@@ -304,11 +306,14 @@ async function listConfigs(request, env, theme) {
        JOIN devices d ON d.id = c.device_id
        LEFT JOIN assets a ON a.config_id = c.id AND a.status = 'approved'
       WHERE c.theme = ? AND c.status = 'active' AND c.assets_status != 'pending'
+        AND (c.schema = ? OR (c.schema < ? AND NOT EXISTS (
+              SELECT 1 FROM schema_policies p
+               WHERE p.theme = c.theme AND p.schema = c.schema AND p.state = 'unsupported')))
       GROUP BY c.id
       ORDER BY ${orderBy}
       LIMIT ? OFFSET ?`
   )
-    .bind(theme, PAGE_SIZE + 1, offset)
+    .bind(theme, clientSchema, clientSchema, PAGE_SIZE + 1, offset)
     .all();
 
   const has_more = results.length > PAGE_SIZE;
@@ -341,9 +346,11 @@ async function listConfigs(request, env, theme) {
 
 async function getConfigDetail(env, theme, id) {
   const row = await env.DB.prepare(
-    `SELECT c.*, d.id AS author_id, d.nickname AS author
+    `SELECT c.*, d.id AS author_id, d.nickname AS author,
+            p.state AS policy_state, p.sunset_at AS policy_sunset_at
        FROM configs c
        JOIN devices d ON d.id = c.device_id
+       LEFT JOIN schema_policies p ON p.theme = c.theme AND p.schema = c.schema
       WHERE c.theme = ? AND c.id = ? AND c.status = 'active'`
   )
     .bind(theme, id)
@@ -377,6 +384,7 @@ async function getConfigDetail(env, theme, id) {
     assets_status: row.assets_status,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    compat: compatOf(row.policy_state, row.policy_sunset_at),
     payload: JSON.parse(row.payload),
     assets,
   });

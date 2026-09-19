@@ -29,6 +29,9 @@ import {
   handleClearNickname,
 } from "./admin-devices.js";
 import { handleStats, handleLogList } from "./admin-audit.js";
+import { handleNoticesFeed } from "./notices.js";
+import { handleNoticeList, handleNoticeCreate, handleNoticeRevoke } from "./admin-notices.js";
+import { handleSchemaList, handleSchemaPolicy } from "./admin-schemas.js";
 import { jsonResponse, errorResponse, MAX_BODY_BYTES, CORS_HEADERS, withCors } from "./http.js";
 
 const router = createRouter();
@@ -38,6 +41,8 @@ router.add("GET", "/api/v1/ping", () => jsonResponse({ pong: true }));
 // The creator profile. No :theme segment -- an account is not per-theme.
 // Body is just {device_token, nickname?}; handleMe applies its own small cap.
 router.add("POST", "/api/v1/me", (request, env) => handleMe(request, env));
+
+router.add("GET", "/api/v1/notices", handleNoticesFeed);
 
 // Multi-theme ready routing: v1 only accepts "aurora" for every :theme route,
 // checked before the handler runs.
@@ -201,6 +206,11 @@ router.add("GET", "/api/v1/admin/reports", handleReportsList);
 router.add("POST", "/api/v1/admin/reports/:rid/resolve", handleResolveReport);
 router.add("GET", "/api/v1/admin/stats", handleStats);
 router.add("GET", "/api/v1/admin/log", handleLogList);
+router.add("GET", "/api/v1/admin/notices", handleNoticeList);
+router.add("POST", "/api/v1/admin/notices", handleNoticeCreate);
+router.add("POST", "/api/v1/admin/notices/:id/revoke", handleNoticeRevoke);
+router.add("GET", "/api/v1/admin/schemas", handleSchemaList);
+router.add("POST", "/api/v1/admin/schemas/:theme/:schema", handleSchemaPolicy);
 
 export default {
   async fetch(request, env) {

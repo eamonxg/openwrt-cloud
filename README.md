@@ -27,6 +27,51 @@ Generate `TICKET_SECRET` with `head -c32 /dev/urandom | xxd -p -c64`. Rotating
 it invalidates outstanding upload tickets; they live 30 minutes, so a rotation
 can at worst make someone's in-flight publish fail and need retrying.
 
+## `hub/` notices and schema policy
+
+Both are admin actions, recorded in `admin_actions`, and both have a panel in
+`/admin` (通知 / Schema 策略). Routers pull `GET /api/v1/notices?theme=aurora&schema=N`
+on their own schedule and the response is cacheable for 5 minutes, so a new
+notice or a revoke is not instant.
+
+Issue a notice. `level` is `info` (in-app inbox only), `warning` or `critical`
+(also a global LuCI banner); `audience` is `all` or `creators`; `theme` is
+`aurora` or `*`. `title`/`body` are the English default and `i18n` carries
+per-locale overrides. `url` must be empty, `https://…`, or a LuCI path starting
+with `admin/`. `min_schema`/`max_schema`/`starts_at`/`expires_at` are optional;
+a timestamp without a zone is read as UTC. `body` and each `i18n.*.body` are a
+Markdown subset (up to 4000 characters) that the hub stores and returns as
+written; the renderer's source of truth is `luci-app-aurora-config`
+(`.dev/src/resource/utils/markdown.js`), and the console preview's copy
+`hub/site/admin/markdown-core.js` is regenerated with
+`node hub/scripts/sync-markdown.mjs` (`--check` reports drift).
+
+```sh
+curl -X POST "https://$HUB_HOST/api/v1/admin/notices" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" \
+  -d '{"theme":"aurora","level":"warning","audience":"creators",
+       "title":"Schema 1 shares stop listing on 2026-12-01",
+       "body":"Open Marketplace and update your shares.",
+       "url":"admin/system",
+       "i18n":{"zh-cn":{"title":"schema 1 的分享将于 2026-12-01 停止展示"}},
+       "max_schema":1,"expires_at":"2026-12-01T00:00:00Z"}'
+```
+
+Take one back with `POST /api/v1/admin/notices/<id>/revoke`.
+
+Set a schema policy. `current` lists normally; `deprecated` still lists but
+tells the author (via `POST /api/v1/me`) to update before `sunset_at`;
+`unsupported` hides that schema's configs from every client that reads a newer
+one, while clients still on that schema keep seeing them. A schema with no
+policy row counts as `current`, but `compat_summary.current_schema` only looks
+at rows — add one for a new schema when it ships.
+
+```sh
+curl -X POST "https://$HUB_HOST/api/v1/admin/schemas/aurora/1" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" \
+  -d '{"state":"deprecated","sunset_at":"2026-12-01T00:00:00Z"}'
+```
+
 ## `hub/` R2 lifecycle
 
 The `themes-hub-assets` bucket needs one rule: **delete objects under the

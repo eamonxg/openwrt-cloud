@@ -3,10 +3,13 @@ import {
   renderDeviceDetail,
   renderDeviceList,
   renderLogList,
+  renderNoticeList,
   renderReportList,
+  renderSchemaList,
   renderStatsBar,
 } from "./views.js";
 import { closeDrawer, confirmDestructive, openDrawer } from "./drawer.js";
+import { renderMarkdown } from "./markdown-core.js";
 
 "use strict";
 
@@ -100,6 +103,7 @@ const state = {
   // 次写动作之后的重新加载。
   device: { q: "", banned: "all", page: 1, selected: null },
   log: { page: 1 },
+  notice: { page: 1 },
   total: 0,
   pageSize: 50,
 };
@@ -194,6 +198,7 @@ function pagedState() {
   if (state.tab === "configs") return state.config;
   if (state.tab === "devices" && !state.device.selected) return state.device;
   if (state.tab === "log") return state.log;
+  if (state.tab === "notices") return state.notice;
   return null;
 }
 
@@ -439,6 +444,163 @@ async function resolveReport(item) {
 }
 
 // -----------------------------------------------------------------------------
+// 通知 tab
+// -----------------------------------------------------------------------------
+
+async function loadNotices() {
+  const tabBody = document.getElementById("tab-body");
+  let body;
+  try {
+    body = await apiFetchJson(`/api/v1/admin/notices?page=${state.notice.page}`);
+  } catch (err) {
+    tabBody.replaceChildren(el("div", { class: "empty", text: "通知列表加载失败:" + (err.message || err) }));
+    renderPager();
+    return;
+  }
+  state.total = body.total;
+  state.pageSize = body.page_size;
+
+  renderNoticeList(tabBody, body.items, {
+    revoke: (item) =>
+      act(`/notices/${encodeURIComponent(item.id)}/revoke`, `撤回「${item.title}」?路由器下次拉取时它就不再出现,撤回不能撤销。`),
+  });
+  renderPager();
+}
+
+// datetime-local 给的是没有时区的本地墙上时间;服务端把无时区的时间当 UTC,
+// 所以必须在这里换成带 Z 的 ISO 再发。
+function localInputToIso(value) {
+  return value ? new Date(value).toISOString() : null;
+}
+
+function noticeFromForm(form) {
+  const field = (name) => form.elements[name].value.trim();
+  const schemaBound = (name) => (field(name) ? Number(field(name)) : null);
+
+  const zh = {};
+  if (field("zh_title")) zh.title = field("zh_title");
+  if (field("zh_body")) zh.body = field("zh_body");
+
+  return {
+    theme: field("theme"),
+    level: field("level"),
+    audience: field("audience"),
+    title: field("title"),
+    body: field("body"),
+    url: field("url"),
+    i18n: Object.keys(zh).length ? { "zh-cn": zh } : {},
+    min_schema: schemaBound("min_schema"),
+    max_schema: schemaBound("max_schema"),
+    starts_at: localInputToIso(field("starts_at")),
+    expires_at: localInputToIso(field("expires_at")),
+  };
+}
+
+const NOTICE_URL_MAX = 500;
+const NOTICE_LUCI_PATH_PATTERN = /^admin(\/[A-Za-z0-9_-]+)+$/;
+
+// 与服务端 validateNoticeUrl 同一条规则,路由器上的渲染器也按它放行链接。
+function noticeLinkHref(url) {
+  if (url.length > NOTICE_URL_MAX) return "";
+  if (NOTICE_LUCI_PATH_PATTERN.test(url)) return url;
+  if (!url.startsWith("https://") || /\s/.test(url)) return "";
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password ? url : "";
+  } catch {
+    return "";
+  }
+}
+
+function renderNoticePreview(textarea, preview) {
+  preview.replaceChildren(renderMarkdown(textarea.value, document, noticeLinkHref));
+  // admin/… 只在路由器的 LuCI 里有意义,在这个域名下点开是另一个地址。
+  for (const link of preview.querySelectorAll("a")) {
+    const href = link.getAttribute("href");
+    link.title = href;
+    if (NOTICE_LUCI_PATH_PATTERN.test(href)) link.removeAttribute("href");
+  }
+}
+
+const noticeForm = document.getElementById("notice-form");
+const noticePreviews = [...noticeForm.querySelectorAll("[data-preview-for]")].map((preview) => ({
+  preview,
+  textarea: noticeForm.elements[preview.dataset.previewFor],
+}));
+
+for (const { textarea, preview } of noticePreviews) {
+  textarea.addEventListener("input", () => renderNoticePreview(textarea, preview));
+}
+noticeForm.addEventListener("reset", () => {
+  for (const { preview } of noticePreviews) preview.replaceChildren();
+});
+
+noticeForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const notice = noticeFromForm(noticeForm);
+  if (!confirm(`向 ${notice.theme} 的${notice.audience === "creators" ? "创作者" : "所有用户"}发布 ${notice.level} 通知「${notice.title}」?`)) return;
+
+  try {
+    await apiFetchJson("/api/v1/admin/notices", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(notice),
+    });
+  } catch (err) {
+    alert("发布失败:" + (err.message || err));
+    return;
+  }
+  noticeForm.reset();
+  state.notice.page = 1;
+  await reloadTab();
+});
+
+// -----------------------------------------------------------------------------
+// Schema 策略 tab
+// -----------------------------------------------------------------------------
+
+async function loadSchemas() {
+  const tabBody = document.getElementById("tab-body");
+  let body;
+  try {
+    body = await apiFetchJson("/api/v1/admin/schemas");
+  } catch (err) {
+    tabBody.replaceChildren(el("div", { class: "empty", text: "Schema 策略加载失败:" + (err.message || err) }));
+    renderPager();
+    return;
+  }
+
+  renderSchemaList(tabBody, body.items, { save: savePolicy });
+  renderPager();
+}
+
+async function savePolicy(theme, schema, policyState, sunsetLocal) {
+  if (!schema) {
+    alert("先填 schema 编号。");
+    return;
+  }
+  const consequence =
+    policyState === "unsupported"
+      ? "读得懂更新 schema 的客户端将不再在列表里看到这个 schema 的配置,作者会被提示更新后重新上架。"
+      : policyState === "deprecated"
+        ? "作者会在「我的分享」里看到需要更新的提示和截止日。"
+        : "这个 schema 的配置恢复为正常状态。";
+  if (!confirm(`把 ${theme} schema ${schema} 设为 ${policyState}?${consequence}`)) return;
+
+  try {
+    await apiFetchJson(`/api/v1/admin/schemas/${encodeURIComponent(theme)}/${encodeURIComponent(schema)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ state: policyState, sunset_at: localInputToIso(sunsetLocal) }),
+    });
+  } catch (err) {
+    alert("保存失败:" + (err.message || err));
+    return;
+  }
+  await reloadTab();
+}
+
+// -----------------------------------------------------------------------------
 // 日志页
 // -----------------------------------------------------------------------------
 
@@ -476,6 +638,8 @@ function reloadTab() {
   if (state.tab === "devices") return loadDevices();
   if (state.tab === "reports") return loadReports();
   if (state.tab === "log") return loadLog();
+  if (state.tab === "notices") return loadNotices();
+  if (state.tab === "schemas") return loadSchemas();
   return Promise.resolve();
 }
 
@@ -488,6 +652,7 @@ function syncChrome() {
   document.getElementById("config-toolbar").hidden = state.tab !== "configs";
   document.getElementById("device-toolbar").hidden =
     state.tab !== "devices" || Boolean(state.device.selected);
+  document.getElementById("notice-form-section").hidden = state.tab !== "notices";
   document.getElementById("log-btn").setAttribute("aria-pressed", String(state.tab === "log"));
 }
 

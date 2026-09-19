@@ -44,6 +44,8 @@
     <button class="tab" data-tab="configs">配置</button>
     <button class="tab" data-tab="devices">创作者</button>
     <button class="tab" data-tab="reports">举报</button>
+    <button class="tab" data-tab="notices">通知</button>
+    <button class="tab" data-tab="schemas">Schema 策略</button>
   </nav>
 
   <section class="toolbar" id="config-toolbar">
@@ -69,6 +71,68 @@
       <option value="yes">已封禁</option>
       <option value="no">未封禁</option>
     </select>
+  </section>
+
+  <section class="panel-form" id="notice-form-section" hidden>
+    <form id="notice-form" class="form-grid">
+      <label>主题
+        <select name="theme">
+          <option value="aurora">aurora</option>
+          <option value="*">* (全部主题)</option>
+        </select>
+      </label>
+      <label>级别
+        <select name="level">
+          <option value="info">info (仅收件箱)</option>
+          <option value="warning">warning (全局横幅)</option>
+          <option value="critical">critical (全局横幅)</option>
+        </select>
+      </label>
+      <label>受众
+        <select name="audience">
+          <option value="all">all (所有人)</option>
+          <option value="creators">creators (有受影响分享的创作者)</option>
+        </select>
+      </label>
+      <label class="wide">标题 (英文,默认文案)
+        <input type="text" name="title" maxlength="120" required />
+      </label>
+      <div class="wide md-field">
+        <label>正文 (英文,Markdown)
+          <textarea name="body" maxlength="4000" rows="6"></textarea>
+          <span class="muted">支持:段落、# ~ ### 标题、**粗**、*斜*、`行内代码`、``` 代码块、- / 1. 单层列表、> 引用、--- 分隔线、[文字](https://… 或 admin/…);HTML 与图片按原文显示</span>
+        </label>
+        <div class="md-preview" data-preview-for="body" aria-label="正文预览"></div>
+      </div>
+      <label class="wide">链接 (可空;只接受 https 链接,或 admin/ 开头的 LuCI 路径)
+        <input type="text" name="url" maxlength="500" />
+      </label>
+      <label class="wide">zh-cn 标题 (可空)
+        <input type="text" name="zh_title" maxlength="120" />
+      </label>
+      <div class="wide md-field">
+        <label>zh-cn 正文 (可空,Markdown)
+          <textarea name="zh_body" maxlength="4000" rows="6"></textarea>
+          <span class="muted">支持:段落、# ~ ### 标题、**粗**、*斜*、`行内代码`、``` 代码块、- / 1. 单层列表、> 引用、--- 分隔线、[文字](https://… 或 admin/…);HTML 与图片按原文显示</span>
+        </label>
+        <div class="md-preview" data-preview-for="zh_body" aria-label="zh-cn 正文预览"></div>
+      </div>
+      <label>min_schema (可空)
+        <input type="number" name="min_schema" min="1" step="1" />
+      </label>
+      <label>max_schema (可空)
+        <input type="number" name="max_schema" min="1" step="1" />
+      </label>
+      <label>生效时间 (本地时间,可空 = 立即)
+        <input type="datetime-local" name="starts_at" />
+      </label>
+      <label>过期时间 (本地时间,可空 = 不过期)
+        <input type="datetime-local" name="expires_at" />
+      </label>
+      <div class="card-actions wide">
+        <button type="submit" class="primary">发布通知</button>
+      </div>
+    </form>
   </section>
 
   <main id="tab-body"><div class="empty">加载中…</div></main>

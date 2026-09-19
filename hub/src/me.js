@@ -12,8 +12,10 @@ import { HttpError, deviceFromToken } from "./auth.js";
 import { extractPreview, previewAssets } from "./configs.js";
 import { validateNickname } from "./validate.js";
 import { jsonResponse, errorResponse, readJsonBounded } from "./http.js";
+import { compatOf, currentSchema } from "./schema-policy.js";
 
 const SMALL_BODY_BYTES = 4096;
+const SUMMARY_THEME = "aurora";
 
 // Two kinds of row reach the author, and exactly two: what is live, and what
 // an admin took down. What the author deleted themselves is NOT here.
@@ -43,10 +45,12 @@ async function listOwnConfigs(db, deviceId) {
       // what is still pending or already rejected -- or the author's own copy
       // of a card would promise artwork the store does not serve.
       `SELECT c.id, c.name, c.downloads, c.assets_status, c.status,
-              c.assets_reject_reason, c.created_at, c.payload,
+              c.assets_reject_reason, c.created_at, c.payload, c.schema,
+              p.state AS policy_state, p.sunset_at AS policy_sunset_at,
               GROUP_CONCAT(a.kind) AS approved_kinds
          FROM configs c
          LEFT JOIN assets a ON a.config_id = c.id AND a.status = 'approved'
+         LEFT JOIN schema_policies p ON p.theme = c.theme AND p.schema = c.schema
         WHERE c.device_id = ?
           AND (c.status = 'active' OR c.removed_by = 'admin')
         GROUP BY c.id
@@ -69,8 +73,16 @@ async function listOwnConfigs(db, deviceId) {
     // know why.
     status: row.status,
     created_at: row.created_at,
+    schema: row.schema,
+    compat: compatOf(row.policy_state, row.policy_sunset_at),
     preview: extractPreview(JSON.parse(row.payload), previewAssets(row.id, row.approved_kinds)),
   }));
+}
+
+function summarizeCompat(configs, current) {
+  const live = configs.filter((config) => config.status === "active");
+  const countOf = (state) => live.filter((config) => config.compat.state === state).length;
+  return { current_schema: current, deprecated: countOf("deprecated"), unsupported: countOf("unsupported") };
 }
 
 async function me(request, env) {
@@ -139,10 +151,12 @@ async function me(request, env) {
     }
   }
 
+  const configs = await listOwnConfigs(env.DB, profile.id);
   return jsonResponse({
     id: profile.id,
     nickname: profile.nickname ?? null,
-    configs: await listOwnConfigs(env.DB, profile.id),
+    configs,
+    compat_summary: summarizeCompat(configs, await currentSchema(env.DB, SUMMARY_THEME)),
   });
 }
 
