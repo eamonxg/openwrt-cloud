@@ -7,7 +7,7 @@
     { "pkg": "luci-theme-shadcn",      "repo": "eamonxg/luci-theme-shadcn" },
     { "pkg": "luci-app-aurora-config", "repo": "eamonxg/luci-app-aurora-config",
       "langs": ["zh-cn","zh-tw","de","es","fr","id","it","ja","ko","nl","pl","ru","tr","uk","vi"] },
-    { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "dashboard-redesign",
+    { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "dashboard-customize",
       "feed": "luci", "formats": ["apk"], "langs": ["zh-cn"] },
     { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "dashboard-redesign-24.10",
       "feed": "luci", "formats": ["opkg"], "langs": ["zh-cn"] }
