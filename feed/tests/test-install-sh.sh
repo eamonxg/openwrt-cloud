@@ -98,6 +98,16 @@ grep -qE '^  luci-theme-shadcn +0\.5\.2 ' <<<"$out" \
   || { echo "FAIL: opkg listing should show the highest available version"; echo "$out"; fail=1; }
 
 # --- PKGS= picks the verb per package ---------------------------------------
+setup_sandbox apk
+run_install "" PKGS="luci-mod-dashboard" \
+  FAKE_AVAIL="luci-mod-dashboard=1.0 luci-theme-aurora=1.1.0"
+[ "$rc" = 0 ] || { echo "FAIL: single-package run exited $rc"; echo "$out"; fail=1; }
+assert_log "apk update"
+assert_log "apk add luci-mod-dashboard"
+refute_log "apk add luci-theme-aurora"
+grep -q 'feed.example.test/snapshots/apk/' "$tmp/root/etc/apk/repositories.d/customfeeds.list" \
+  || { echo "FAIL: single-package run did not add feed"; fail=1; }
+
 setup_sandbox opkg
 run_install "" YES=1 PKGS="luci-theme-aurora luci-theme-shadcn" \
   FAKE_INSTALLED="luci-theme-shadcn" \

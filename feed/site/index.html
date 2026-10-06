@@ -856,6 +856,14 @@ html:not([data-dappled]) .dapple g { animation-play-state: paused !important; }
       <span class="zh">各仓库主分支每日构建；脚本按设备架构选择对应目录</span></h3>
     <div class="cmd"><button class="copy" type="button">copy</button><pre><code><span class="p">$</span> wget -qO- https://__FEED_HOST__/install.sh | sh</code></pre></div>
 
+    <details>
+      <summary><span class="en">Install one package directly</span><span class="zh">只安装指定软件包</span></summary>
+      <p class="hint">
+        <span class="en">This still adds the signing key and feed and updates the index. It installs (or upgrades) only the named package; the package manager may also install required dependencies.</span>
+        <span class="zh">此命令仍会导入公钥、添加软件源并更新索引；只安装（或升级）指定包，包管理器也可能安装必要依赖。</span>
+      </p>
+      <div class="cmd"><button class="copy" type="button">copy</button><pre><code><span class="p">$</span> wget -qO- https://__FEED_HOST__/install.sh | PKGS=luci-mod-dashboard sh</code></pre></div>
+    </details>
 
     <p class="hint">
       <span class="en">The releases channel has been merged into snapshots. A router set up with a releases URL only needs the install command run again.</span>
