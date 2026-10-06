@@ -30,7 +30,7 @@ case "$cmd" in
     # and those come out ahead of the theme's own directory in the listing.
     echo "/www/luci-static/resources/menu-${1#luci-theme-}.js"
     echo "/www/luci-static/${1#luci-theme-}/cascade.css"; exit 0 ;;
-  install|upgrade)
+  install|upgrade|remove)
     for p in "$@"; do
       if has "$p" "$FAKE_FAIL"; then echo "opkg: $p failed" >&2; exit 1; fi
       echo "Configuring $p."

@@ -36,7 +36,7 @@ case "$cmd" in
     if [ "$2" = "$3" ]; then echo "="
     elif [ "$(printf '%s\n%s\n' "$2" "$3" | sort -V | tail -n1)" = "$2" ]; then echo ">"
     else echo "<"; fi; exit 0 ;;
-  add|upgrade)
+  add|upgrade|del)
     for p in "$@"; do
       if has "$p" "$FAKE_FAIL"; then echo "apk: $p failed" >&2; exit 1; fi
       echo "Installing $p"

@@ -4,4 +4,8 @@ if [ "$1" = "-q" ] && [ "$2" = "get" ] && [ "$3" = "luci.main.lang" ]; then
   [ -n "${FAKE_LANG:-}" ] || exit 1
   echo "$FAKE_LANG"; exit 0
 fi
+if [ "$1" = "-q" ] && [ "$2" = "get" ] && [ "$3" = "luci.main.mediaurlbase" ]; then
+  [ -n "${FAKE_THEME:-}" ] || exit 1
+  echo "$FAKE_THEME"; exit 0
+fi
 exit 0

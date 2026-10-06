@@ -911,8 +911,84 @@ html:not([data-dappled]) .dapple g { animation-play-state: paused !important; }
 <span class="p">$</span> apk add luci-theme-aurora</code></pre></div>
   </section>
 
+  <section id="uninstall">
+    <h2><span class="no">03</span><span class="en">Uninstall</span><span class="zh">卸载</span></h2>
+    <p>
+      <span class="en">The script detects opkg / apk, shows the installed packages it will remove, and asks for confirmation. It then removes those packages, the feed entry and the signing key. Other feed entries stay intact.</span>
+      <span class="zh">脚本自动识别 opkg / apk，列出将卸载的已安装包并请求确认，然后移除这些包、软件源配置和签名公钥；其他源不会受影响。</span>
+    </p>
+    <h3><span class="stamp rec"><span class="en">One command</span><span class="zh">一键卸载</span></span>
+      <span class="en">run as root on your router</span><span class="zh">在路由器上以 root 身份执行</span></h3>
+    <div class="cmd"><button class="copy" type="button">copy</button><pre><code><span class="p">$</span> wget -qO- https://__FEED_HOST__/uninstall.sh | sh</code></pre></div>
+    <p class="hint">
+      <span class="en">Package managers cannot reliably tell which feed originally supplied a package. Review the list before running it, especially <code>luci-mod-dashboard</code> if you installed that package from elsewhere. Shared dependencies are left to the package manager.</span>
+      <span class="zh">包管理器无法可靠判断已安装包最初来自哪个源。执行前请检查包名列表，尤其是从其他来源安装过 <code>luci-mod-dashboard</code> 的设备。共用依赖由包管理器自行处理。</span>
+    </p>
+
+    <h3><span class="en">Manual removal</span><span class="zh">手动卸载</span></h3>
+    <h3>opkg <span class="stamp dim">OpenWrt ≤ 24.10</span></h3>
+    <div class="cmd en"><button class="copy" type="button">copy</button><pre><code><span class="c"># Restore the default theme if an eamonxg theme is active</span>
+case "$(uci -q get luci.main.mediaurlbase)" in
+  /luci-static/aurora|/luci-static/shadcn) uci set luci.main.mediaurlbase=/luci-static/bootstrap; uci commit luci ;;
+esac
+<span class="c"># Remove installed feed packages, including translations</span>
+for pkg in __UNINSTALL_PACKAGES__; do
+  if opkg list-installed "$pkg" | awk -v p="$pkg" '$1 == p { found=1 } END { exit !found }'; then
+    opkg remove "$pkg" || exit 1
+  fi
+done
+<span class="c"># Remove this feed and its signing key</span>
+[ ! -f /etc/opkg/customfeeds.conf ] || sed -i '/^src\/gz eamonxg /d' /etc/opkg/customfeeds.conf
+rm -f /etc/opkg/keys/__USIGN_FPR__ /var/opkg-lists/eamonxg
+opkg update</code></pre></div>
+    <div class="cmd zh"><button class="copy" type="button">复制</button><pre><code><span class="c"># 若正在使用本源主题，先切回默认主题</span>
+case "$(uci -q get luci.main.mediaurlbase)" in
+  /luci-static/aurora|/luci-static/shadcn) uci set luci.main.mediaurlbase=/luci-static/bootstrap; uci commit luci ;;
+esac
+<span class="c"># 卸载本源中已安装的包，含语言包</span>
+for pkg in __UNINSTALL_PACKAGES__; do
+  if opkg list-installed "$pkg" | awk -v p="$pkg" '$1 == p { found=1 } END { exit !found }'; then
+    opkg remove "$pkg" || exit 1
+  fi
+done
+<span class="c"># 移除本源配置和签名公钥</span>
+[ ! -f /etc/opkg/customfeeds.conf ] || sed -i '/^src\/gz eamonxg /d' /etc/opkg/customfeeds.conf
+rm -f /etc/opkg/keys/__USIGN_FPR__ /var/opkg-lists/eamonxg
+opkg update</code></pre></div>
+
+    <h3>apk <span class="stamp dim">OpenWrt ≥ 25.12</span></h3>
+    <div class="cmd en"><button class="copy" type="button">copy</button><pre><code><span class="c"># Restore the default theme if an eamonxg theme is active</span>
+case "$(uci -q get luci.main.mediaurlbase)" in
+  /luci-static/aurora|/luci-static/shadcn) uci set luci.main.mediaurlbase=/luci-static/bootstrap; uci commit luci ;;
+esac
+<span class="c"># Remove installed feed packages, including translations</span>
+for pkg in __UNINSTALL_PACKAGES__; do
+  if [ -n "$(apk info -e "$pkg" 2&gt;/dev/null)" ]; then
+    apk del "$pkg" || exit 1
+  fi
+done
+<span class="c"># Remove this feed and its signing key</span>
+[ ! -f /etc/apk/repositories.d/customfeeds.list ] || sed -i '\|https://__FEED_HOST__/|d' /etc/apk/repositories.d/customfeeds.list
+rm -f /etc/apk/keys/eamonxg.pem
+apk update</code></pre></div>
+    <div class="cmd zh"><button class="copy" type="button">复制</button><pre><code><span class="c"># 若正在使用本源主题，先切回默认主题</span>
+case "$(uci -q get luci.main.mediaurlbase)" in
+  /luci-static/aurora|/luci-static/shadcn) uci set luci.main.mediaurlbase=/luci-static/bootstrap; uci commit luci ;;
+esac
+<span class="c"># 卸载本源中已安装的包，含语言包</span>
+for pkg in __UNINSTALL_PACKAGES__; do
+  if [ -n "$(apk info -e "$pkg" 2&gt;/dev/null)" ]; then
+    apk del "$pkg" || exit 1
+  fi
+done
+<span class="c"># 移除本源配置和签名公钥</span>
+[ ! -f /etc/apk/repositories.d/customfeeds.list ] || sed -i '\|https://__FEED_HOST__/|d' /etc/apk/repositories.d/customfeeds.list
+rm -f /etc/apk/keys/eamonxg.pem
+apk update</code></pre></div>
+  </section>
+
   <section id="versions">
-    <h2><span class="no">03</span><span class="en">Packages</span><span class="zh">版本表</span></h2>
+    <h2><span class="no">04</span><span class="en">Packages</span><span class="zh">版本表</span></h2>
     <div id="tables"><p class="hint">
       <span class="en">Loading manifest.json…</span><span class="zh">加载 manifest.json…</span>
     </p></div>
