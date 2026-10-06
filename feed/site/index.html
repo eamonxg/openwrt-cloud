@@ -922,18 +922,19 @@ html:not([data-dappled]) .dapple g { animation-play-state: paused !important; }
   <section id="uninstall">
     <h2><span class="no">03</span><span class="en">Uninstall</span><span class="zh">卸载</span></h2>
     <p>
-      <span class="en">The script detects opkg / apk, shows the installed packages it will remove, and asks for confirmation. It then removes those packages, the feed entry and the signing key. Other feed entries stay intact.</span>
-      <span class="zh">脚本自动识别 opkg / apk，列出将卸载的已安装包并请求确认，然后移除这些包、软件源配置和签名公钥；其他源不会受影响。</span>
+      <span class="en">Run as root on your router. The script detects opkg / apk, shows the installed packages it will remove and asks for confirmation. It then removes those packages, the feed entry and the signing key; other feed entries stay intact.</span>
+      <span class="zh">在路由器上以 root 身份执行。脚本自动识别 opkg / apk，列出将卸载的已安装包并请求确认，然后移除这些包、软件源配置和签名公钥；其他源不会受影响。</span>
     </p>
-    <h3><span class="stamp rec"><span class="en">One command</span><span class="zh">一键卸载</span></span>
-      <span class="en">run as root on your router</span><span class="zh">在路由器上以 root 身份执行</span></h3>
+    <h3><span class="stamp rec"><span class="en">One-command uninstall</span><span class="zh">一键卸载</span></span></h3>
     <div class="cmd"><button class="copy" type="button">copy</button><pre><code><span class="p">$</span> wget -qO- https://__FEED_HOST__/uninstall.sh | sh</code></pre></div>
     <p class="hint">
       <span class="en">Package managers cannot reliably tell which feed originally supplied a package. Review the list before running it, especially <code>luci-mod-dashboard</code> if you installed that package from elsewhere. Shared dependencies are left to the package manager.</span>
       <span class="zh">包管理器无法可靠判断已安装包最初来自哪个源。执行前请检查包名列表，尤其是从其他来源安装过 <code>luci-mod-dashboard</code> 的设备。共用依赖由包管理器自行处理。</span>
     </p>
 
-    <h3><span class="en">Manual removal</span><span class="zh">手动卸载</span></h3>
+    <details>
+      <summary><span class="en">See the manual steps behind this command</span><span class="zh">查看一键卸载对应的手动步骤</span></summary>
+      <p class="hint"><span class="en">These commands perform the same cleanup without the script’s confirmation prompt. Choose one method.</span><span class="zh">下面的命令完成同样的清理，但不会像脚本那样先请求确认。两种方式任选其一。</span></p>
     <h3>opkg <span class="stamp dim">OpenWrt ≤ 24.10</span></h3>
     <div class="cmd en"><button class="copy" type="button">copy</button><pre><code><span class="c"># Restore the default theme if an eamonxg theme is active</span>
 case "$(uci -q get luci.main.mediaurlbase)" in
@@ -993,6 +994,7 @@ done
 [ ! -f /etc/apk/repositories.d/customfeeds.list ] || sed -i '\|https://__FEED_HOST__/|d' /etc/apk/repositories.d/customfeeds.list
 rm -f /etc/apk/keys/eamonxg.pem
 apk update</code></pre></div>
+    </details>
   </section>
 
   <section id="versions">
