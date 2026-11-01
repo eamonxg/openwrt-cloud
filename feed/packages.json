@@ -9,7 +9,7 @@
       "langs": ["zh-cn","zh-tw","de","es","fr","id","it","ja","ko","nl","pl","ru","tr","uk","vi"] },
     { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "dashboard-temperature",
       "feed": "luci", "formats": ["apk"], "langs": ["zh-cn"] },
-    { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "dashboard-temperature",
+    { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "codex/dashboard-temperature-24.10",
       "feed": "luci", "formats": ["opkg"], "langs": ["zh-cn"] }
   ]
 }
