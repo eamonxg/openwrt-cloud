@@ -35,15 +35,36 @@ ARCH=""
 [ -f "$ROOT/etc/openwrt_release" ] && ARCH=$(. "$ROOT/etc/openwrt_release" 2>/dev/null; printf '%s' "${DISTRIB_ARCH:-}")
 echo "Package manager: $PM  |  arch: ${ARCH:-unknown}"
 
-# fetch <url> <dest> — OpenWrt's default wget is uclient-fetch, which cannot do
-# TLS without libustream-ssl. Say that, rather than surfacing a bare exit code.
+# Retry transient transport failures and publish only a complete download.
+# A TLS EOF does not imply a missing library; package names vary by release.
 fetch() {
-  if wget -qO "$2" "$1"; then return 0; fi
+  for fetch_attempt in 1 2 3; do
+    if wget -T 20 -qO "$TMP/download" "$1"; then
+      mv "$TMP/download" "$2"
+      return 0
+    fi
+    if [ "$fetch_attempt" -lt 3 ]; then
+      echo "Download failed; retrying ($fetch_attempt/3): $1" >&2
+      sleep 2
+    fi
+  done
   echo "" >&2
   echo "ERROR: could not fetch $1" >&2
-  echo "If this router has no HTTPS support yet, install it and re-run:" >&2
-  echo "  $PM $ADD libustream-ssl-mbedtls ca-bundle" >&2
+  echo "Check the connection, DNS, router clock and installed HTTPS/CA support." >&2
+  echo "TLS EOF/reset errors can be transient network failures, even with HTTPS support installed." >&2
   exit 1
+}
+
+refresh_indexes() {
+  for update_attempt in 1 2 3; do
+    if "$PM" update; then return 0; fi
+    if [ "$update_attempt" -lt 3 ]; then
+      echo "Index update incomplete; retrying ($update_attempt/3)." >&2
+      sleep 2
+    fi
+  done
+  echo "ERROR: package indexes could not be refreshed; no packages were installed." >&2
+  return 1
 }
 
 # drop_lines <file> <fixed-string> — remove our previous feed lines (idempotent re-runs,
@@ -75,7 +96,7 @@ else
 fi
 
 # Step 3: refresh the index
-"$PM" update
+refresh_indexes
 
 ALL="__PACKAGES__"
 EXTRA=$(arch_extra "$ARCH")
