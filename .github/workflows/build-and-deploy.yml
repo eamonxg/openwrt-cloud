@@ -150,8 +150,8 @@ jobs:
           set -euo pipefail
           python3 -m http.server -d dist 18080 >/dev/null 2>&1 &
           sleep 1
-          feed/scripts/verify-feed.sh http://127.0.0.1:18080 apk  snapshots/apk  tools/tools-apk  dist/eamonxg.pem luci-theme-aurora luci-theme-shadcn luci-app-aurora-config
-          feed/scripts/verify-feed.sh http://127.0.0.1:18080 opkg snapshots/opkg tools/tools-opkg dist/eamonxg.pub luci-theme-aurora luci-theme-shadcn luci-app-aurora-config
+          feed/scripts/verify-feed.sh http://127.0.0.1:18080 apk  snapshots/apk  tools/tools-apk  dist/eamonxg.pem luci-theme-aurora luci-theme-shadcn luci-app-aurora-config luci-mod-dashboard luci-i18n-dashboard-zh-cn
+          feed/scripts/verify-feed.sh http://127.0.0.1:18080 opkg snapshots/opkg tools/tools-opkg dist/eamonxg.pub luci-theme-aurora luci-theme-shadcn luci-app-aurora-config luci-mod-dashboard luci-i18n-dashboard-zh-cn
       - name: Deploy
         if: ${{ !inputs.dry_run }}
         uses: cloudflare/wrangler-action@v3
@@ -166,8 +166,8 @@ jobs:
           set -euo pipefail
           host="${{ vars.FEED_HOST }}"
           verify() {
-            feed/scripts/verify-feed.sh "https://$host" apk  snapshots/apk  tools/tools-apk  dist/eamonxg.pem luci-theme-aurora luci-theme-shadcn luci-app-aurora-config || return 1
-            feed/scripts/verify-feed.sh "https://$host" opkg snapshots/opkg tools/tools-opkg dist/eamonxg.pub luci-theme-aurora luci-theme-shadcn luci-app-aurora-config || return 1
+            feed/scripts/verify-feed.sh "https://$host" apk  snapshots/apk  tools/tools-apk  dist/eamonxg.pem luci-theme-aurora luci-theme-shadcn luci-app-aurora-config luci-mod-dashboard luci-i18n-dashboard-zh-cn || return 1
+            feed/scripts/verify-feed.sh "https://$host" opkg snapshots/opkg tools/tools-opkg dist/eamonxg.pub luci-theme-aurora luci-theme-shadcn luci-app-aurora-config luci-mod-dashboard luci-i18n-dashboard-zh-cn || return 1
             for a in $(jq -r '.arches[]' plan.json); do
               feed/scripts/verify-feed.sh "https://$host" apk "snapshots/apk/$a" tools/tools-apk dist/eamonxg.pem luci-theme-aurora || return 1
             done

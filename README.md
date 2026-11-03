@@ -11,6 +11,16 @@ top-level directory is an independently deployed Cloudflare Worker:
 The real domain is never committed; workflows substitute it from repo
 variables (`FEED_HOST`, `HUB_HOST`).
 
+Dashboard packages use separate LuCI refs for the two SDK generations. The
+APK entry tracks `codex/network-path-bootstrap-preview`; the IPK entry tracks
+`codex/network-path-bootstrap-preview-24.10`, which carries the same
+`modules/luci-mod-dashboard` tree on the existing 24.10-compatible LuCI base.
+Keep these package trees in sync: replacing the complete 24.10 feed with the
+modern LuCI branch also replaces build dependencies such as `rpcd-mod-luci`
+and can exceed the older SDK's toolchain requirements. The feed workflow
+checks that Dashboard and its Simplified Chinese translation are present in
+both signed indexes before deployment and again on the live feed.
+
 ## `hub/` Worker secrets
 
 None of these are injected by CI — set them once per environment with
