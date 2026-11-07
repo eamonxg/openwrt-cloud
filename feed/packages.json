@@ -7,9 +7,9 @@
     { "pkg": "luci-theme-shadcn",      "repo": "eamonxg/luci-theme-shadcn" },
     { "pkg": "luci-app-aurora-config", "repo": "eamonxg/luci-app-aurora-config",
       "langs": ["zh-cn","zh-tw","de","es","fr","id","it","ja","ko","nl","pl","ru","tr","uk","vi"] },
-    { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "codex/network-path-bootstrap-preview",
+    { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "network-topology",
       "feed": "luci", "formats": ["apk"], "langs": ["zh-cn"] },
-    { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "codex/network-path-bootstrap-preview-24.10",
+    { "pkg": "luci-mod-dashboard",     "repo": "eamonxg/luci", "ref": "network-topology-24.10",
       "feed": "luci", "formats": ["opkg"], "langs": ["zh-cn"] }
   ]
 }

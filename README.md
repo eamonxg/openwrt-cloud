@@ -12,9 +12,9 @@ The real domain is never committed; workflows substitute it from repo
 variables (`FEED_HOST`, `HUB_HOST`).
 
 Dashboard packages use separate LuCI refs for the two SDK generations. The
-APK entry tracks `codex/network-path-bootstrap-preview`; the IPK entry tracks
-`codex/network-path-bootstrap-preview-24.10`, which carries the same
-`modules/luci-mod-dashboard` tree on the existing 24.10-compatible LuCI base.
+APK entry tracks `network-topology`, based on the latest upstream LuCI
+`master`; the IPK entry tracks `network-topology-24.10`, which carries the same
+`modules/luci-mod-dashboard` tree on the latest upstream `openwrt-24.10` base.
 Keep these package trees in sync: replacing the complete 24.10 feed with the
 modern LuCI branch also replaces build dependencies such as `rpcd-mod-luci`
 and can exceed the older SDK's toolchain requirements. The feed workflow
